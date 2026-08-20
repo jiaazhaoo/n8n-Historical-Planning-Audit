@@ -28,11 +28,12 @@ from pathlib import Path
 from typing import Sequence
 
 from .content_qa import (
+    ADDRESS_STOPWORDS,
     ContentQaError,
-    address_matches,
     canonical_reference_key,
     date_keys,
     description_matches,
+    word_tokens,
 )
 from .paddle_ocr import PaddleOcrError, PaddleOcrRunner
 from .schemas import ContentExpectation, QaVerdict
@@ -44,6 +45,48 @@ from .storage import ArtifactStore
 MIN_TEXT_CHARACTERS = 200
 
 NO_SIGNALS = {"reference": False, "address": False, "description": False, "date": False}
+
+
+# A UK postcode, outward or inward half. Source records carry one; a 1980s
+# planning drawing almost never prints it.
+POSTCODE = re.compile(r"^(?:[a-z]{1,2}\d{1,2}[a-z]?|\d[a-z]{2})$")
+
+# Share of the address's own words that must appear in the document.
+ADDRESS_OVERLAP = 0.6
+
+
+def address_in_document(expected: str, text: str, *, council: str = "") -> bool:
+    """Match a source address against a whole document.
+
+    `address_matches` compares one address with another, where a differing house
+    number means a different property and both sides carry a postcode. A
+    document is not an address: it prints the street and the building name but
+    often neither the number nor the postcode, and it holds hundreds of
+    unrelated numbers. Counting those against the address rejected documents
+    that plainly are the right ones -- "8 Oxford Road Exeter EX4 6QU" scored 2
+    of 4 because ex4 and 6qu appear nowhere on a 1989 drawing, and a Topsham
+    Road site was rejected outright because the plan does not print "398".
+
+    So the ratio is taken over the words that name the place, and the house
+    number corroborates a match rather than being required for one.
+    """
+    # The council's own name is on every document it issued, so it can raise a
+    # score without telling one site from another.
+    generic = {word for word in re.findall(r"[a-z']{3,}", council.lower())}
+    expected_tokens = {
+        token
+        for token in word_tokens(expected, stopwords=ADDRESS_STOPWORDS)
+        if not POSTCODE.match(token) and not token.isdigit() and token not in generic
+    }
+    if not expected_tokens:
+        return False
+    observed = word_tokens(text, stopwords=ADDRESS_STOPWORDS)
+    if len(expected_tokens) == 1:
+        # A one-word address such as "8 Oxford Road Exeter" has a single name to
+        # go on; a ratio would be meaningless, so require that one word.
+        return expected_tokens <= observed
+    overlap = expected_tokens & observed
+    return len(overlap) >= 2 and len(overlap) / len(expected_tokens) >= ADDRESS_OVERLAP
 
 
 def _address_words(value: str) -> set[str]:
@@ -89,7 +132,8 @@ class OcrTextVerifier:
         return {
             "reference": bool(reference_hit),
             "address": any(
-                address_matches(value, text) for value in _usable(expectation.address_values)
+                address_in_document(value, text, council=expectation.council)
+                for value in _usable(expectation.address_values)
             ),
             "description": any(
                 description_matches(value, text)
@@ -119,7 +163,7 @@ class OcrTextVerifier:
             if oachargeid == expectation.oachargeid:
                 continue
             for value in addresses:
-                if not address_matches(value, text):
+                if not address_in_document(value, text, council=expectation.council):
                     continue
                 distinguishing = _address_words(value) - own
                 if any(word in lowered for word in distinguishing):
