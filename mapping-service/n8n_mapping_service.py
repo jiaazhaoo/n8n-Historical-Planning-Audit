@@ -412,6 +412,18 @@ def run_mapping(payload: dict[str, Any]) -> dict[str, Any]:
         encoding="utf-8",
     )
 
+    approved_spec_value = str(payload.get("mapping_spec_path") or "").strip()
+    approved_spec = safe_data_path(approved_spec_value) if approved_spec_value else None
+    if approved_spec is None:
+        conventional_spec = (
+            DATA_ROOT / council / "file-matching" / "approved-specs" / f"{slug(batch, label='batch')}.json"
+        )
+        if conventional_spec.is_file():
+            # A spec already verified for this batch is reused by default, so a
+            # working mapping does not depend on the compiler getting it right
+            # again on every run.
+            approved_spec = safe_data_path(str(conventional_spec))
+
     command = [
         str(AUTONOMOUS_ENTRYPOINT),
         "--jobs-root",
@@ -426,6 +438,8 @@ def run_mapping(payload: dict[str, Any]) -> dict[str, Any]:
         "--requested-by",
         "n8n-file-path-mapping",
     ]
+    if approved_spec is not None:
+        command.extend(("--approved-spec", str(approved_spec)))
     result = subprocess.run(
         read_only_job_isolated_command(
             command,
@@ -473,6 +487,8 @@ def run_mapping(payload: dict[str, Any]) -> dict[str, Any]:
     report["selected_capture_rules"] = [str(path) for path in rule_paths]
     report["selected_s3_inventory"] = [str(path) for path in s3_paths]
     report["selected_portal_evidence"] = [str(path) for path in portal_paths]
+    report["approved_spec"] = str(approved_spec) if approved_spec else None
+    report["spec_source"] = "approved" if approved_spec else "compiled"
     # export_outputs wrote the report before these run-level fields existed. The
     # quality loop reads the report from disk to find the audit and source it
     # must review, so the file has to carry what the response carries.
