@@ -502,6 +502,9 @@ QUALITY_LOOP_DIRNAME = "quality-loop"
 # Each sampling round is priced independently, so a loop that needs three rounds
 # costs three budgets rather than dividing one.
 DEFAULT_QA_MODEL = "google/gemini-3.7-flash"
+# Judging fit is a smaller task than extracting identity, so it runs on a
+# cheaper model: measured $0.00035 a case.
+DEFAULT_QA_JUDGE_MODEL = "deepseek/deepseek-v4-flash"
 DEFAULT_QA_BUDGET_USD = 3.0
 DEFAULT_QA_ESTIMATE_USD = 0.01
 QUALITY_REPORT_DIRNAME = "quality-report"
@@ -589,7 +592,8 @@ def run_quality(payload: dict[str, Any]) -> dict[str, Any]:
         acquire=acquire,
         max_images_per_case=int(payload.get("max_images", 12)),
         max_image_pixels=int(payload.get("max_image_pixels", 80_000_000)),
-        extractor_mode=str(payload.get("extractor_mode") or "local").strip().lower(),
+        extractor_mode=str(payload.get("extractor_mode") or "judge").strip().lower(),
+        judge_model=str(payload.get("judge_model") or "").strip() or DEFAULT_QA_JUDGE_MODEL,
         model=str(payload.get("model") or "").strip() or DEFAULT_QA_MODEL,
         budget_usd=float(payload.get("budget_usd", DEFAULT_QA_BUDGET_USD)),
         estimate_usd_per_case=float(
