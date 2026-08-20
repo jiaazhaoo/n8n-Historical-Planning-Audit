@@ -77,9 +77,14 @@ class NormaliserTests(unittest.TestCase):
         self.assertEqual(normalise("78", ("year2to4",)), "1978")
         self.assertEqual(normalise("06", ("year2to4",)), "2006")
 
-    def test_year_expansion_refuses_a_value_that_is_not_two_digits(self) -> None:
+    def test_a_four_digit_year_passes_through_unchanged(self) -> None:
+        # One part name carries the same normalisers on both sides of a join, and
+        # a reference writes 78 where its folder writes 1978.
+        self.assertEqual(normalise("1978", ("year2to4",)), "1978")
+
+    def test_year_expansion_refuses_a_length_that_is_neither(self) -> None:
         with self.assertRaises(DerivationError):
-            normalise("1978", ("year2to4",))
+            normalise("198", ("year2to4",))
 
     def test_an_unknown_normaliser_is_refused(self) -> None:
         with self.assertRaises(DerivationError):
