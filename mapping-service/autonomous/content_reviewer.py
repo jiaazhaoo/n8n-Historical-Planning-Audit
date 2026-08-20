@@ -30,6 +30,7 @@ from .openrouter_vision import (
     OpenRouterVisionExtractor,
     read_api_key,
 )
+from .local_verifier import OcrTextVerifier
 from .ocr_extractor import PaddleOcrObservationExtractor
 from .paddle_ocr import PaddleOcrRunner
 from .review_budget import DEFAULT_ESTIMATE_USD_PER_CASE, DEFAULT_LIMIT_USD, ReviewBudget
@@ -70,9 +71,10 @@ class ReviewerSettings:
     model: str = DEFAULT_MODEL
     budget_usd: float = DEFAULT_LIMIT_USD
     estimate_usd_per_case: float = DEFAULT_ESTIMATE_USD_PER_CASE
-    # "ocr" reads pages locally with PaddleOCR and sends only their text;
-    # "vision" sends the page images themselves.
-    extractor_mode: str = "ocr"
+    # "local" reads pages with PaddleOCR and matches the source record against
+    # their text on this host, with no model call at all. "ocr" sends the OCR
+    # text to a model to extract identities; "vision" sends the page images.
+    extractor_mode: str = "local"
 
     def validate(self) -> None:
         if not self.acquire and self.documents_root is None:
@@ -81,9 +83,9 @@ class ReviewerSettings:
             )
         if self.budget_usd <= 0:
             raise ContentReviewError("budget_usd must be positive")
-        if self.extractor_mode not in {"ocr", "vision"}:
+        if self.extractor_mode not in {"local", "ocr", "vision"}:
             raise ContentReviewError(
-                f"extractor_mode must be 'ocr' or 'vision', got {self.extractor_mode!r}"
+                f"extractor_mode must be 'local', 'ocr' or 'vision', got {self.extractor_mode!r}"
             )
 
 
@@ -270,23 +272,30 @@ class ContentQaReviewer:
             else None
         )
 
-        openrouter = OpenRouterSettings(
-            api_key=read_api_key(settings.openrouter_key_path),
-            model=settings.model,
-        )
-        extractor = (
-            PaddleOcrObservationExtractor(
-                settings=openrouter, budget=budget, runner=PaddleOcrRunner()
+        extractor = None
+        verifier = None
+        if settings.extractor_mode == "local":
+            # No key is read and no request is made: everything stays on the host.
+            verifier = OcrTextVerifier(runner=PaddleOcrRunner(), council=settings.council)
+        else:
+            openrouter = OpenRouterSettings(
+                api_key=read_api_key(settings.openrouter_key_path),
+                model=settings.model,
             )
-            if settings.extractor_mode == "ocr"
-            else OpenRouterVisionExtractor(openrouter, budget=budget)
-        )
+            extractor = (
+                PaddleOcrObservationExtractor(
+                    settings=openrouter, budget=budget, runner=PaddleOcrRunner()
+                )
+                if settings.extractor_mode == "ocr"
+                else OpenRouterVisionExtractor(openrouter, budget=budget)
+            )
         report = run_content_qa(
             run_id=run_id,
             config=config,
             artifacts=artifacts,
             extractor=extractor,
             acquirer=acquirer,
+            verifier=verifier,
         )
         case_results = json.loads(
             Path(report.case_results_path).read_text(encoding="utf-8")

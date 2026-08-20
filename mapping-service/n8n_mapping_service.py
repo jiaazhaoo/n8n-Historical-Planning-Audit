@@ -573,7 +573,7 @@ def run_quality(payload: dict[str, Any]) -> dict[str, Any]:
         acquire=acquire,
         max_images_per_case=int(payload.get("max_images", 12)),
         max_image_pixels=int(payload.get("max_image_pixels", 80_000_000)),
-        extractor_mode=str(payload.get("extractor_mode") or "ocr").strip().lower(),
+        extractor_mode=str(payload.get("extractor_mode") or "local").strip().lower(),
         model=str(payload.get("model") or "").strip() or DEFAULT_QA_MODEL,
         budget_usd=float(payload.get("budget_usd", DEFAULT_QA_BUDGET_USD)),
         estimate_usd_per_case=float(
