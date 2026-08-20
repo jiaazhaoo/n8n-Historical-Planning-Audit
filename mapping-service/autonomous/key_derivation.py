@@ -36,6 +36,28 @@ KIND_PATTERNS = {"d": r"\d+", "a": r"[A-Za-z0-9]+", "*": r".+"}
 
 PAD = re.compile(r"^pad:(\d{1,2})$")
 
+# The first five are the vocabulary the rest of the spec already uses for
+# whole-field normalisation; the rest only make sense on an extracted part.
+# They share one list so a compiler cannot pick a name that parses here but
+# means nothing, or vice versa.
+KNOWN_NORMALIZERS = frozenset(
+    {
+        "trim",
+        "casefold",
+        "collapse_space",
+        "slash_to_hyphen",
+        "alnum",
+        "upper",
+        "lower",
+        "strip_zeros",
+        "year2to4",
+    }
+)
+
+
+def is_known_normalizer(name: str) -> bool:
+    return name in KNOWN_NORMALIZERS or bool(PAD.match(name))
+
 
 def normalise(value: str, normalizers: Sequence[str], *, year_pivot: int = 30) -> str:
     """Apply the declared normalisers, in order, to one extracted part."""
@@ -46,8 +68,14 @@ def normalise(value: str, normalizers: Sequence[str], *, year_pivot: int = 30) -
             result = digits or "0"
         elif name == "upper":
             result = result.upper()
-        elif name == "lower":
-            result = result.lower()
+        elif name in {"lower", "casefold"}:
+            result = result.casefold()
+        elif name == "collapse_space":
+            result = re.sub(r"\s+", " ", result).strip()
+        elif name == "slash_to_hyphen":
+            result = result.replace("/", "-")
+        elif name == "alnum":
+            result = re.sub(r"[^0-9a-zA-Z]+", "", result)
         elif name == "trim":
             result = result.strip()
         elif name == "year2to4":
@@ -143,6 +171,16 @@ class KeyDerivation:
             raise DerivationError("A derivation needs at least one key part")
         if not self.source_templates or not self.inventory_templates:
             raise DerivationError("Both sides need at least one template")
+        # An unknown normaliser would otherwise make every key unbuildable, and
+        # a key that never builds reads as "no case matched" rather than as the
+        # configuration error it is.
+        for part, names in self.normalizers.items():
+            unknown = [name for name in names if not is_known_normalizer(name)]
+            if unknown:
+                raise DerivationError(
+                    f"part {part!r} declares unknown normaliser(s) {unknown}; "
+                    f"choose from {sorted(KNOWN_NORMALIZERS)} or pad:N"
+                )
         for side, templates in (
             ("source", self.source_templates),
             ("inventory", self.inventory_templates),

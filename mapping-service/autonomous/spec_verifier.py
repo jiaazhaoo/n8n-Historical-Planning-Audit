@@ -116,6 +116,71 @@ def ambiguity_negative_test_errors(spec: MappingSpec, preparation: PreparationRe
     return errors
 
 
+def derived_key_join_errors(
+    spec: MappingSpec, preparation: PreparationReport
+) -> tuple[list[str], list[str]]:
+    """Dry-run every derived key against the real evidence before executing it.
+
+    A derivation can be structurally valid and still join nothing, because a
+    part means different things on the two sides -- a folder's trailing code is
+    a document type, while a reference's trailing code is an application type.
+    Nothing in the schema can catch that, but running the derivation over the
+    prepared source and inventory answers it in seconds, before a mapping run
+    reports every case as not_found.
+    """
+    errors: list[str] = []
+    warnings: list[str] = []
+    routes = [
+        route
+        for route in spec.routes
+        if route.target != RouteTarget.REJECT and route.derived_key is not None
+    ]
+    if not routes:
+        return errors, warnings
+
+    _, source_rows = read_csv(preparation.source_path)
+    _, inventory_rows = read_csv(preparation.inventory_path)
+    if not source_rows or not inventory_rows:
+        return errors, warnings
+
+    for route in routes:
+        derivation = route.derived_key.build()
+        key_field = route.inventory_key_field or spec.inventory_key_field
+        index: set[tuple[str, ...]] = set()
+        for candidate in inventory_rows:
+            key = derivation.inventory_key(str(candidate.get(key_field) or ""))
+            if key is not None:
+                index.add(key)
+
+        selected = [row for row in source_rows if route_for(row, spec) == route]
+        joined = 0
+        keyed = 0
+        for row in selected:
+            value = str(row.get(route.authoritative_key) or "").strip()
+            if not value and route.fallback_key:
+                value = str(row.get(route.fallback_key) or "").strip()
+            key = derivation.source_key(value) if value else None
+            if key is None:
+                continue
+            keyed += 1
+            if key in index:
+                joined += 1
+
+        rate = joined / len(selected) if selected else 0.0
+        warnings.append(
+            f"route {route.rule_id}: derived key joins {joined}/{len(selected)} routed cases "
+            f"({rate:.1%}); {keyed} produced a key and the inventory yielded {len(index)} distinct keys"
+        )
+        if joined == 0 and len(selected) >= 20 and len(index) >= 20:
+            errors.append(
+                f"route {route.rule_id}: the derived key joins none of {len(selected)} routed cases "
+                f"against {len(index)} inventory keys. Check that every part in key_parts means the "
+                "same thing on both sides; a folder's trailing code is usually a document type, not "
+                "the reference's application-type suffix."
+            )
+    return errors, warnings
+
+
 def verify_mapping_spec(
     *,
     job_id: str,
@@ -212,6 +277,9 @@ def verify_mapping_spec(
         warnings.append("MappingSpec contains only reject routes; this is safe but produces no accepted mappings")
     negative_errors = ambiguity_negative_test_errors(spec, preparation)
     errors.extend(negative_errors)
+    join_errors, join_warnings = derived_key_join_errors(spec, preparation)
+    errors.extend(join_errors)
+    warnings.extend(join_warnings)
     gates = {
         "council_batch_exact": spec.council == preparation.council and spec.batch == preparation.batch,
         "source_fields_exist": not any("source" in error and "absent" in error for error in errors),

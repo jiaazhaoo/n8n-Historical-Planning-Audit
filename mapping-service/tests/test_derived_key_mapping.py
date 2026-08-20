@@ -166,6 +166,42 @@ class DerivedKeyVerifierTests(unittest.TestCase):
         self.assertFalse([e for e in errors if "cannot render" in e])
 
 
+class NormalizerVocabularyTests(unittest.TestCase):
+    def test_the_route_normaliser_names_also_work_per_part(self) -> None:
+        # The compiler naturally reaches for the vocabulary the rest of the spec
+        # uses; a name that parses in one place and not the other silently
+        # produced no key at all.
+        key = DerivedKey(
+            source_templates=("{yy:d}/{num:d}/{code:a}",),
+            inventory_templates=("EXE_{yyyy:d}_{yy:d}-{num:d}-{code:a}",),
+            key_parts=("yy", "num"),
+            part_normalizers=(
+                {"part": "num", "normalizers": ("strip_zeros",)},
+                {"part": "yy", "normalizers": ("trim", "casefold")},
+            ),
+        ).build()
+        self.assertEqual(key.source_key("88/1061/FUL"), ("88", "1061"))
+
+    def test_an_unknown_normaliser_is_refused_rather_than_zeroing_every_key(self) -> None:
+        with self.assertRaises(ValueError) as caught:
+            DerivedKey(
+                source_templates=("{yy:d}/{num:d}",),
+                inventory_templates=("EXE_{yy:d}-{num:d}",),
+                key_parts=("yy", "num"),
+                part_normalizers=({"part": "yy", "normalizers": ("titlecase",)},),
+            )
+        self.assertIn("titlecase", str(caught.exception))
+
+    def test_pad_is_accepted_as_a_parameterised_normaliser(self) -> None:
+        key = DerivedKey(
+            source_templates=("{prefix:a}.{num:d}",),
+            inventory_templates=("{prefix:a}.{num:d}",),
+            key_parts=("prefix", "num"),
+            part_normalizers=({"part": "num", "normalizers": ("pad:5",)},),
+        ).build()
+        self.assertEqual(key.source_key("TVN.10"), ("TVN", "00010"))
+
+
 class DerivedKeyValidationTests(unittest.TestCase):
     def test_a_key_part_absent_from_one_side_is_refused(self) -> None:
         with self.assertRaises(ValueError):

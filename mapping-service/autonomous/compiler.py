@@ -107,6 +107,9 @@ MappingSpec schema. Your output is a proposal and will be rejected by an indepen
 
 Non-negotiable rules:
 - Use exactly the packet council and batch. Never infer another batch.
+- Routes are evaluated from the lowest priority number upwards, and the first match wins. Give accepting
+  routes low numbers and put any catch-all reject route at the highest number, or the reject shadows
+  everything and the mapping accepts nothing.
 - Use only source and inventory field names listed in the packet.
 - Translate capture-rule prose into ordered route predicates. Do not invent S3 paths or Portal URLs.
 - S3 and Portal candidates must come from exact inventory rows through inventory key/path fields.
@@ -121,12 +124,15 @@ Non-negotiable rules:
   normalizers. Whole-field normalizers cannot rebuild a key from parts. Declare source_templates and
   inventory_templates over the same named parts, list in key_parts only the parts that genuinely identify
   the record, and give per-part normalizers such as strip_zeros or pad:5 as part_normalizers entries,
-  each naming one part and the normalizers to apply to it. Give each side
+  each naming one part and the normalizers to apply to it. Per-part normalizer names are the same
+  vocabulary as the route normalizers, plus strip_zeros, year2to4 and pad:N. Give each side
   more than one template when references arrive in shape variants. Use inventory_match_mode "prefix" when
   inventory entries append free text after the key. A part written {{name:d}} matches digits, {{name:a}}
   matches letters and digits, and a bare {{name}} runs up to the next literal character.
-- Do not put a part in key_parts unless both sides mean the same thing by it. A trailing code on a folder
-  is often a document-type code unrelated to the reference suffix, and keying on it matches nothing.
+- Do not put a part in key_parts unless both sides mean the same thing by it. For example a reference
+  88/1061/FUL and its folder EXE_1988_88-1061-02 share a year and a number, but FUL is an application
+  type while 02 is a document type: key_parts must be the year and number only. A part that means two
+  different things joins nothing, and the spec will be rejected for joining nothing.
 - Conditions are ANDed. Use an always predicate only for a genuine catch-all route.
 - For an always predicate set field to the empty string and value to null. For is_blank and not_blank,
   set value to null.

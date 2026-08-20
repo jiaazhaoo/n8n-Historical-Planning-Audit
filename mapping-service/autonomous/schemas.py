@@ -218,6 +218,8 @@ class DerivedKey(StrictModel):
 
 class RouteRule(StrictModel):
     rule_id: NonEmpty
+    # Evaluated lowest first; the first matching route wins. A catch-all reject
+    # therefore belongs at the highest number, not the lowest.
     priority: int
     conditions: tuple[Predicate, ...]
     target: RouteTarget
