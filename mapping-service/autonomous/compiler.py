@@ -322,14 +322,24 @@ class CodexOAuthCompiler:
         produced: list[Path] = [packet_path, schema_path]
         last_errors: list[str] = []
         for attempt in range(1, max(1, max_attempts) + 1):
-            spec, raw_output, log_path = self._attempt(
-                attempt=attempt,
-                packet_path=packet_path,
-                packet=packet,
-                schema_path=schema_path,
-                artifacts=artifacts,
-                rejected=rejected,
-            )
+            try:
+                spec, raw_output, log_path = self._attempt(
+                    attempt=attempt,
+                    packet_path=packet_path,
+                    packet=packet,
+                    schema_path=schema_path,
+                    artifacts=artifacts,
+                    rejected=rejected,
+                )
+            except CompilerError as exc:
+                # A proposal that will not even parse is the kind of mistake
+                # feedback fixes best -- a malformed template, a part named
+                # twice. Retrying it is the same loop as a verification failure.
+                if attempt >= max(1, max_attempts):
+                    raise
+                last_errors = [str(exc)]
+                rejected.append(last_errors)
+                continue
             produced.extend((raw_output, log_path))
             errors = verifier(spec) if verifier else []
             if not errors:

@@ -181,6 +181,31 @@ class CompileRetryTests(unittest.TestCase):
             recorded = json.loads(store.resolve("compiler/attempts.json").read_text())
             self.assertEqual(recorded["attempts"], 2)
 
+    def test_a_proposal_that_will_not_parse_is_retried_with_the_reason(self) -> None:
+        # A malformed template is exactly what feedback fixes; failing the whole
+        # compile on the first one wastes the remaining attempts.
+        class BadThenGood(ScriptedCodex):
+            def __call__(self, command, **kwargs):
+                self.prompts.append(kwargs.get("input", ""))
+                output = Path(command[command.index("--output-last-message") + 1])
+                output.parent.mkdir(parents=True, exist_ok=True)
+                text = "not a spec" if len(self.prompts) == 1 else spec_json("attempt-2")
+                output.write_text(text, encoding="utf-8")
+                return subprocess.CompletedProcess(args=command, returncode=0, stdout="", stderr="")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            tmp = Path(temporary)
+            runner = BadThenGood()
+            spec, _ = compiler(runner).compile(
+                report=preparation(tmp),
+                artifacts=ArtifactStore(tmp / "job"),
+                verifier=lambda candidate: [],
+                max_attempts=3,
+            )
+            self.assertEqual(spec.spec_id, "attempt-2")
+            self.assertEqual(len(runner.prompts), 2)
+            self.assertIn("PREVIOUS ATTEMPTS", runner.prompts[1])
+
     def test_a_settled_spec_is_reused_instead_of_recompiled(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             tmp = Path(temporary)

@@ -119,6 +119,16 @@ class Template:
         return tuple(match.group("name") for match in PART.finditer(self.pattern))
 
     def _compile(self) -> re.Pattern[str]:
+        names = list(self.part_names)
+        duplicates = sorted({name for name in names if names.count(name) > 1})
+        if duplicates:
+            # Otherwise this surfaces as re.error about a redefined group, which
+            # says nothing about what to write instead.
+            raise DerivationError(
+                f"Template {self.pattern!r} names part(s) {duplicates} more than once. "
+                "Each part must have its own name; a four-digit year and the two-digit year "
+                "inside it are two parts, not one."
+            )
         out: list[str] = ["^"]
         position = 0
         for match in PART.finditer(self.pattern):
@@ -139,7 +149,10 @@ class Template:
         # In prefix mode anything may follow: Exeter appends a free-text address
         # to some folder names, so the derived key is a prefix of the folder.
         out.append(r"(?P<_tail>.*)$" if self.match_mode == "prefix" else "$")
-        return re.compile("".join(out))
+        try:
+            return re.compile("".join(out))
+        except re.error as exc:
+            raise DerivationError(f"Template {self.pattern!r} is not usable: {exc}") from exc
 
     def parse(self, text: str) -> dict[str, str] | None:
         match = getattr(self, "_regex").match((text or "").strip())

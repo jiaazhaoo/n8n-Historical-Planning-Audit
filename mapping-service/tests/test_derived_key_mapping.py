@@ -240,6 +240,22 @@ class KeyFailureExplanationTests(unittest.TestCase):
         self.assertIn("keys without error", explanation)
 
 
+class TemplateErrorTests(unittest.TestCase):
+    def test_a_part_named_twice_is_explained(self) -> None:
+        # A compiler wrote SHE_19{year}_{year}-{number}, meaning the four-digit
+        # year and the two-digit year inside it. That surfaced as a regex error
+        # about a redefined group, which says nothing about what to write.
+        with self.assertRaises(ValueError) as caught:
+            DerivedKey(
+                source_templates=("{year:d}/{number:d}",),
+                inventory_templates=("SHE_19{year:d}_{year:d}-{number:d}",),
+                key_parts=("year", "number"),
+            )
+        message = str(caught.exception)
+        self.assertIn("more than once", message)
+        self.assertIn("two parts, not one", message)
+
+
 class DerivedKeyValidationTests(unittest.TestCase):
     def test_a_key_part_absent_from_one_side_is_refused(self) -> None:
         with self.assertRaises(ValueError):
