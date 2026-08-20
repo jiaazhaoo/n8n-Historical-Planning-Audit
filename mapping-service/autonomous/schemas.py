@@ -149,6 +149,20 @@ class RouteTarget(str, Enum):
     REJECT = "reject"
 
 
+class PartNormalizers(StrictModel):
+    """Normalisers applied to one named part before it enters the key."""
+
+    part: NonEmpty
+    normalizers: tuple[NonEmpty, ...]
+
+
+class PartDefault(StrictModel):
+    """Value used for a part an alternative template does not capture."""
+
+    part: NonEmpty
+    value: str
+
+
 class DerivedKey(StrictModel):
     """Build the join key from parts of a reference, on both sides at once.
 
@@ -169,8 +183,11 @@ class DerivedKey(StrictModel):
     key_parts: tuple[NonEmpty, ...]
     source_match_mode: Literal["exact", "prefix"] = "exact"
     inventory_match_mode: Literal["exact", "prefix"] = "exact"
-    normalizers: dict[str, tuple[str, ...]] = {}
-    defaults: dict[str, str] = {}
+    # Declared as lists rather than maps: a structured-output schema has to name
+    # every property it allows, so an open-keyed object cannot be requested from
+    # the compiler at all.
+    part_normalizers: tuple[PartNormalizers, ...] = ()
+    part_defaults: tuple[PartDefault, ...] = ()
 
     def build(self) -> KeyDerivation:
         return KeyDerivation(
@@ -182,8 +199,10 @@ class DerivedKey(StrictModel):
                 for pattern in self.inventory_templates
             ),
             key_parts=tuple(self.key_parts),
-            normalizers={name: tuple(values) for name, values in self.normalizers.items()},
-            defaults=dict(self.defaults),
+            normalizers={
+                entry.part: tuple(entry.normalizers) for entry in self.part_normalizers
+            },
+            defaults={entry.part: entry.value for entry in self.part_defaults},
         )
 
     @model_validator(mode="after")

@@ -30,7 +30,7 @@ EXETER_KEY = DerivedKey(
     inventory_templates=("EXE_{year4:d}_{yy:d}-{number:d}-{code:a}", "EXE_{year4:d}_{yy:d}-{number:d}"),
     inventory_match_mode="prefix",
     key_parts=("yy", "number"),
-    normalizers={"number": ("strip_zeros",)},
+    part_normalizers=({"part": "number", "normalizers": ("strip_zeros",)},),
 )
 
 

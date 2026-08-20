@@ -120,7 +120,8 @@ Non-negotiable rules:
   leading zeros, a prefix or year the reference does not carry -- set derived_key instead of relying on
   normalizers. Whole-field normalizers cannot rebuild a key from parts. Declare source_templates and
   inventory_templates over the same named parts, list in key_parts only the parts that genuinely identify
-  the record, and put per-part normalizers such as strip_zeros or pad:5 in normalizers. Give each side
+  the record, and give per-part normalizers such as strip_zeros or pad:5 as part_normalizers entries,
+  each naming one part and the normalizers to apply to it. Give each side
   more than one template when references arrive in shape variants. Use inventory_match_mode "prefix" when
   inventory entries append free text after the key. A part written {{name:d}} matches digits, {{name:a}}
   matches letters and digits, and a bare {{name}} runs up to the next literal character.
