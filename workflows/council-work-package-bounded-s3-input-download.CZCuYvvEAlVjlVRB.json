@@ -1,0 +1,301 @@
+{
+  "active": true,
+  "connections": {
+    "Convert download log to JSON": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Write download JSON log",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Download JSON log": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Convert download log to JSON",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Download approved file": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Write to local input folder",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Input source path": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Parse and restrict path",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "List up to 11 source files": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Reject unsafe source",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "One item per file": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Download approved file",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Parse and restrict path": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "List up to 11 source files",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Reject unsafe source": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "One item per file",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Write to local input folder": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Download JSON log",
+            "type": "main"
+          }
+        ]
+      ]
+    }
+  },
+  "description": null,
+  "id": "CZCuYvvEAlVjlVRB",
+  "meta": null,
+  "name": "Council work-package — bounded S3 input download",
+  "nodeGroups": [],
+  "nodes": [
+    {
+      "id": "manual",
+      "name": "Input source path",
+      "parameters": {
+        "formDescription": "Enter the exact S3-style path, for example /rmsiscratch/production/input/Braintree/Work packages/Work Package 2.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Source path",
+              "fieldName": "source_path",
+              "fieldType": "text",
+              "placeholder": "/rmsiscratch/production/input/<Council>/Work packages/<Batch>",
+              "requiredField": true
+            }
+          ]
+        },
+        "formTitle": "Council work-package download",
+        "options": {
+          "path": "council-work-package-download"
+        }
+      },
+      "position": [
+        -800,
+        0
+      ],
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.4,
+      "webhookId": "99bd097b-dd4c-45b2-916a-68c0f825bf95"
+    },
+    {
+      "id": "parse",
+      "name": "Parse and restrict path",
+      "parameters": {
+        "jsCode": "const source = String($json.source_path || '').replace(/\\/+$/, '');\nconst parts = source.split('/').filter(Boolean);\nif (parts.length !== 6 || parts[0] !== 'rmsiscratch' || parts[1] !== 'production' || parts[2] !== 'input' || parts[4].toLowerCase() !== 'work packages' || parts.some(p => p === '.' || p === '..')) throw new Error('Input must be /rmsiscratch/production/input/<Council>/Work Packages/<Batch>.');\nconst slug = value => value.toLowerCase().replace(/^work\\s+package\\s*/i, 'workpackage').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');\nconst council = slug(parts[3]); const batch = slug(parts[5]);\nif (!council || !batch) throw new Error('Council and batch must contain letters or digits.');\nconst workPackagesSegment = council === 'braintree' ? 'Work packages' : parts[4];\nconst run_timestamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\\.\\d{3}Z$/, 'Z');\nreturn [{json:{source_path:source,bucket:'rmsiscratch',prefix:[parts[1],parts[2],parts[3],workPackagesSegment,parts[5]].join('/')+'/',council,batch,run_timestamp,destination:`/data/${council}/input-landmark/${batch}_${run_timestamp}`,report_directory:`/data/${council}/download_reports`,report_filename:`${council}_${batch}_initial_${run_timestamp}.json`}}];"
+      },
+      "position": [
+        -400,
+        0
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "alwaysOutputData": true,
+      "credentials": {
+        "aws": {
+          "id": "gwtLAR1qSIB4834g",
+          "name": "RMSI S3 local credential"
+        }
+      },
+      "id": "list",
+      "name": "List up to 11 source files",
+      "parameters": {
+        "bucketName": "={{$json.bucket}}",
+        "limit": 11,
+        "operation": "getAll",
+        "options": {
+          "folderKey": "={{$json.prefix}}"
+        },
+        "resource": "file",
+        "returnAll": false
+      },
+      "position": [
+        -180,
+        0
+      ],
+      "type": "n8n-nodes-base.awsS3",
+      "typeVersion": 2
+    },
+    {
+      "id": "guard",
+      "name": "Reject unsafe source",
+      "parameters": {
+        "jsCode": "const fs = require('fs');\nconst listed = $input.all().map(i => i.json);\nconst context = $('Parse and restrict path').first().json;\nconst files = listed.filter(x => x.Key);\nconst nested = files.filter(x => x.Key.slice(context.prefix.length).includes('/'));\nif (files.length === 0) throw new Error('No files found at the approved S3 prefix.');\nif (files.length > 10) throw new Error(`Unsafe source: ${files.length}+ files found; maximum is 10.`);\nif (nested.length) throw new Error(`Unsafe source: subfolder content found (${nested.map(x => x.Key).join(', ')}).`);\nfs.mkdirSync(context.destination, {recursive:true}); fs.mkdirSync(context.report_directory, {recursive:true});\nreturn [{json: {...context, files: files.map(x => ({key:x.Key, size:x.Size, last_modified:x.LastModified}))}}];"
+      },
+      "position": [
+        40,
+        0
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "split",
+      "name": "One item per file",
+      "parameters": {
+        "fieldToSplitOut": "files",
+        "include": "allOtherFields",
+        "options": {}
+      },
+      "position": [
+        260,
+        0
+      ],
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1
+    },
+    {
+      "credentials": {
+        "aws": {
+          "id": "gwtLAR1qSIB4834g",
+          "name": "RMSI S3 local credential"
+        }
+      },
+      "id": "download",
+      "name": "Download approved file",
+      "parameters": {
+        "binaryPropertyName": "data",
+        "bucketName": "={{$json.bucket}}",
+        "fileKey": "={{$json.files.key}}",
+        "operation": "download",
+        "resource": "file"
+      },
+      "position": [
+        480,
+        0
+      ],
+      "type": "n8n-nodes-base.awsS3",
+      "typeVersion": 2
+    },
+    {
+      "id": "write",
+      "name": "Write to local input folder",
+      "parameters": {
+        "dataPropertyName": "data",
+        "fileName": "={{$json.destination + '/' + $json.files.key.split('/').pop()}}",
+        "operation": "write",
+        "options": {}
+      },
+      "position": [
+        700,
+        0
+      ],
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1
+    },
+    {
+      "id": "report",
+      "name": "Download JSON log",
+      "parameters": {
+        "jsCode": "const fs = require('fs'); const XLSX = require('@e965/xlsx');\nconst completed = $input.all(); const first = completed[0].json;\nconst files = completed.map(i => ({s3_key:i.json.files.key, local_path:i.json.fileName, size:i.json.files.size, last_modified:i.json.files.last_modified}));\nconst candidate = files.find(f => /\\.xlsx?$/i.test(f.local_path)) || files.find(f => /\\.json$/i.test(f.local_path));\nif (!candidate) throw new Error('No JSON or XLSX source table was downloaded.');\nlet rows; if (/\\.json$/i.test(candidate.local_path)) { const value = JSON.parse(fs.readFileSync(candidate.local_path, 'utf8')); rows = Array.isArray(value) ? value : (Array.isArray(value.data) ? value.data : []); } else { const workbook = XLSX.read(fs.readFileSync(candidate.local_path)); rows = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], {defval:null}); }\nif (!Array.isArray(rows) || !rows.length) throw new Error('The selected source table contains no rows.');\nconst fields = [...new Set(rows.flatMap(row => Object.keys(row)))]; const missing = Object.fromEntries(fields.map(field => { const count = rows.filter(row => row[field] === null || row[field] === undefined || String(row[field]).trim() === '').length; return [field,{missing_count:count,missing_rate:Number((count/rows.length).toFixed(4))}]; }));\nreturn [{json:{status:'downloaded',source_path:first.source_path,council:first.council,batch:first.batch,run_timestamp:first.run_timestamp,destination:first.destination,report_path:first.report_directory+'/'+first.report_filename,downloaded_files:files,downloaded_file_count:files.length,table_file:candidate.local_path,case_count:rows.length,table_fields:fields,field_missing_distribution:missing,table_head_20:rows.slice(0,20)}}];"
+      },
+      "position": [
+        920,
+        0
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "reportfile",
+      "name": "Convert download log to JSON",
+      "parameters": {
+        "binaryPropertyName": "data",
+        "mode": "once",
+        "operation": "toJson",
+        "options": {
+          "fileName": "={{$('Download JSON log').first().json.report_filename}}",
+          "format": true
+        }
+      },
+      "position": [
+        1140,
+        0
+      ],
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1
+    },
+    {
+      "id": "writereport",
+      "name": "Write download JSON log",
+      "parameters": {
+        "dataPropertyName": "data",
+        "fileName": "={{$('Download JSON log').first().json.report_path}}",
+        "operation": "write",
+        "options": {}
+      },
+      "position": [
+        1360,
+        0
+      ],
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1
+    }
+  ],
+  "pinData": null,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": []
+}

@@ -1,0 +1,18 @@
+{
+  "active": false,
+  "connections": {},
+  "description": null,
+  "id": "3llANO65oNWsrHxb",
+  "meta": null,
+  "name": "My workflow",
+  "nodeGroups": [],
+  "nodes": [],
+  "pinData": {},
+  "settings": {
+    "availableInMCP": false,
+    "binaryMode": "separate",
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": []
+}

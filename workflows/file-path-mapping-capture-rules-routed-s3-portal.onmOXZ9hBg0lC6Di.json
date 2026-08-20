@@ -1,14 +1,50 @@
 {
+  "active": true,
+  "connections": {
+    "Compile rules and map every case": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Mapping outputs",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Mapping job input": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Validate mapping request",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Validate mapping request": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Compile rules and map every case",
+            "type": "main"
+          }
+        ]
+      ]
+    }
+  },
+  "description": null,
+  "id": "onmOXZ9hBg0lC6Di",
+  "meta": null,
   "name": "File path mapping — capture rules routed S3 / Portal",
+  "nodeGroups": [],
   "nodes": [
     {
       "id": "mapping-form",
       "name": "Mapping job input",
-      "type": "n8n-nodes-base.formTrigger",
-      "typeVersion": 2.4,
-      "position": [-560, 0],
       "parameters": {
-        "formTitle": "File path mapping",
         "formDescription": "Compile capture rules first, route every case to Amazon S3, Portal, or a safe rejection, and write case-complete mapping outputs.",
         "formFields": {
           "values": [
@@ -59,67 +95,71 @@
             }
           ]
         },
+        "formTitle": "File path mapping",
         "options": {
           "path": "file-path-mapping"
         }
-      }
+      },
+      "position": [
+        -560,
+        0
+      ],
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.4,
+      "webhookId": "5ef3e031-9d2f-4f0e-9214-40c50f89b20d"
     },
     {
       "id": "validate-input",
       "name": "Validate mapping request",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [-300, 0],
       "parameters": {
         "jsCode": "const text = key => String($json[key] || '').trim();\nconst council = text('council').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');\nconst batch = text('batch');\nconst input_directory = text('input_directory').replace(/\\/+$/, '');\nif (!council) throw new Error('Council is required.');\nif (!batch) throw new Error('A registered batch is required.');\nif (!input_directory.startsWith('/data/') || input_directory.includes('/../') || input_directory.startsWith('/data/file-browser-data')) throw new Error('Input directory must be a safe path below /data and outside /data/file-browser-data.');\nreturn [{json:{council,batch,input_directory,source_path:text('source_path'),capture_rules_paths:text('capture_rules_paths'),s3_inventory_paths:text('s3_inventory_paths'),portal_evidence_paths:text('portal_evidence_paths')}}];"
-      }
+      },
+      "position": [
+        -300,
+        0
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
     },
     {
       "id": "run-mapping",
       "name": "Compile rules and map every case",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [-20, 0],
       "parameters": {
-        "method": "POST",
-        "url": "http://host.docker.internal:5680/run",
-        "sendBody": true,
-        "contentType": "raw",
-        "rawContentType": "application/json",
         "body": "={{ JSON.stringify($json) }}",
+        "contentType": "raw",
+        "method": "POST",
         "options": {
           "timeout": 1800000
-        }
-      }
+        },
+        "rawContentType": "application/json",
+        "sendBody": true,
+        "url": "http://host.docker.internal:5680/run"
+      },
+      "position": [
+        -20,
+        0
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
     },
     {
       "id": "mapping-summary",
       "name": "Mapping outputs",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [260, 0],
       "parameters": {
         "jsCode": "const result = $json;\nif (!result.coverage?.exact) throw new Error('Mapping completed without exact source/mapping/audit coverage.');\nreturn [{json:{status:result.status,production_published:false,job_id:result.job_id,council:result.council,batch:result.batch,case_count:result.case_count,match_status_counts:result.match_status_counts,source_type_counts:result.source_type_counts,selected_capture_rules:result.selected_capture_rules,selected_s3_inventory:result.selected_s3_inventory,selected_portal_evidence:result.selected_portal_evidence,outputs:result.outputs}}];"
-      }
+      },
+      "position": [
+        260,
+        0
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
     }
   ],
-  "connections": {
-    "Mapping job input": {
-      "main": [[{"node": "Validate mapping request", "type": "main", "index": 0}]]
-    },
-    "Validate mapping request": {
-      "main": [[{"node": "Compile rules and map every case", "type": "main", "index": 0}]]
-    },
-    "Compile rules and map every case": {
-      "main": [[{"node": "Mapping outputs", "type": "main", "index": 0}]]
-    }
-  },
+  "pinData": null,
   "settings": {
     "executionOrder": "v1"
   },
-  "pinData": {},
-  "meta": {
-    "templateCredsSetupCompleted": true
-  },
+  "staticData": null,
   "tags": []
 }
