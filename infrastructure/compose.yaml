@@ -1,0 +1,42 @@
+services:
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:${N8N_VERSION:-2.35.4}
+    container_name: n8n
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${N8N_PORT:-5678}:5678"
+    environment:
+      NODE_ENV: production
+      N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS: "true"
+      NODE_FUNCTION_ALLOW_BUILTIN: "fs"
+      NODE_FUNCTION_ALLOW_EXTERNAL: "@e965/xlsx"
+      N8N_RESTRICT_FILE_ACCESS_TO: "/data"
+      GENERIC_TIMEZONE: "${GENERIC_TIMEZONE:-Europe/London}"
+      TZ: "${TZ:-Europe/London}"
+      N8N_INSTANCE_AI_SANDBOX_ENABLED: "true"
+      N8N_SANDBOX_SERVICE_URL: "${N8N_SANDBOX_SERVICE_URL:-http://sandbox.internal:3200}"
+      N8N_SANDBOX_SERVICE_API_KEY: "${N8N_SANDBOX_SERVICE_API_KEY}"
+    volumes:
+      - n8n_data:/home/node/.n8n
+      # Required for council-specific input and report directories derived from approved S3 paths.
+      - /data:/data
+    extra_hosts:
+      # The mapping bridge is bound only to the Docker host gateway, not the LAN.
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "--quiet", "http://127.0.0.1:5678/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - default
+      - sandbox-service
+
+volumes:
+  n8n_data:
+
+networks:
+  sandbox-service:
+    name: n8n-sandbox-service
+    external: true

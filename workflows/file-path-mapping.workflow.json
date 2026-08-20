@@ -1,0 +1,125 @@
+{
+  "name": "File path mapping — capture rules routed S3 / Portal",
+  "nodes": [
+    {
+      "id": "mapping-form",
+      "name": "Mapping job input",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.4,
+      "position": [-560, 0],
+      "parameters": {
+        "formTitle": "File path mapping",
+        "formDescription": "Compile capture rules first, route every case to Amazon S3, Portal, or a safe rejection, and write case-complete mapping outputs.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Council",
+              "fieldName": "council",
+              "fieldType": "text",
+              "placeholder": "exeter",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Registered batch",
+              "fieldName": "batch",
+              "fieldType": "text",
+              "placeholder": "wp1",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Downloaded input directory",
+              "fieldName": "input_directory",
+              "fieldType": "text",
+              "placeholder": "/data/exeter/input-landmark/microfiche-capture-1977-1985_20260820T110605Z",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Source table path (optional override)",
+              "fieldName": "source_path",
+              "fieldType": "text",
+              "placeholder": "/data/.../source.xlsx"
+            },
+            {
+              "fieldLabel": "Capture rules paths (optional override; one per line)",
+              "fieldName": "capture_rules_paths",
+              "fieldType": "textarea",
+              "placeholder": "/data/.../CaptureRules-v2.docx"
+            },
+            {
+              "fieldLabel": "S3 inventory paths (one per line)",
+              "fieldName": "s3_inventory_paths",
+              "fieldType": "textarea",
+              "placeholder": "/data/exeter/file-matching/exeter-s3-folder-index.csv"
+            },
+            {
+              "fieldLabel": "Portal evidence paths (one per line)",
+              "fieldName": "portal_evidence_paths",
+              "fieldType": "textarea",
+              "placeholder": "/data/.../portal-evidence.csv"
+            }
+          ]
+        },
+        "options": {
+          "path": "file-path-mapping"
+        }
+      }
+    },
+    {
+      "id": "validate-input",
+      "name": "Validate mapping request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-300, 0],
+      "parameters": {
+        "jsCode": "const text = key => String($json[key] || '').trim();\nconst council = text('council').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');\nconst batch = text('batch');\nconst input_directory = text('input_directory').replace(/\\/+$/, '');\nif (!council) throw new Error('Council is required.');\nif (!batch) throw new Error('A registered batch is required.');\nif (!input_directory.startsWith('/data/') || input_directory.includes('/../') || input_directory.startsWith('/data/file-browser-data')) throw new Error('Input directory must be a safe path below /data and outside /data/file-browser-data.');\nreturn [{json:{council,batch,input_directory,source_path:text('source_path'),capture_rules_paths:text('capture_rules_paths'),s3_inventory_paths:text('s3_inventory_paths'),portal_evidence_paths:text('portal_evidence_paths')}}];"
+      }
+    },
+    {
+      "id": "run-mapping",
+      "name": "Compile rules and map every case",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-20, 0],
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:5680/run",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 1800000
+        }
+      }
+    },
+    {
+      "id": "mapping-summary",
+      "name": "Mapping outputs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [260, 0],
+      "parameters": {
+        "jsCode": "const result = $json;\nif (!result.coverage?.exact) throw new Error('Mapping completed without exact source/mapping/audit coverage.');\nreturn [{json:{status:result.status,production_published:false,job_id:result.job_id,council:result.council,batch:result.batch,case_count:result.case_count,match_status_counts:result.match_status_counts,source_type_counts:result.source_type_counts,selected_capture_rules:result.selected_capture_rules,selected_s3_inventory:result.selected_s3_inventory,selected_portal_evidence:result.selected_portal_evidence,outputs:result.outputs}}];"
+      }
+    }
+  ],
+  "connections": {
+    "Mapping job input": {
+      "main": [[{"node": "Validate mapping request", "type": "main", "index": 0}]]
+    },
+    "Validate mapping request": {
+      "main": [[{"node": "Compile rules and map every case", "type": "main", "index": 0}]]
+    },
+    "Compile rules and map every case": {
+      "main": [[{"node": "Mapping outputs", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}
