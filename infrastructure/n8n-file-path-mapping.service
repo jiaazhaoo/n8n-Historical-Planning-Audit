@@ -4,6 +4,11 @@ After=network.target docker.service
 
 [Service]
 Type=simple
+# The bridge reads council evidence and writes mapping outputs as the owning
+# user. Installed as a system unit it would otherwise run as root, which it has
+# no need for.
+User=rmsi
+Group=rmsi
 WorkingDirectory=/env/code/file-matching
 Environment=HOME=/home/rmsi
 Environment=PATH=/home/rmsi/bin:/home/rmsi/miniconda3/bin:/usr/local/bin:/usr/bin:/bin
@@ -12,4 +17,4 @@ Restart=on-failure
 RestartSec=3
 
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target
