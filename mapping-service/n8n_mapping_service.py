@@ -160,6 +160,52 @@ def write_csv(path: Path, rows: Iterable[dict[str, str]], fields: tuple[str, ...
         writer.writerows(rows)
 
 
+EXCEL_CELL_LIMIT = 32767
+
+
+def write_xlsx(path: Path, rows: Iterable[dict[str, str]], fields: tuple[str, ...], *, sheet: str) -> None:
+    """Write a mapping table as .xlsx alongside the canonical CSV.
+
+    Every cell is written as text. Charge identifiers, references and paths look
+    numeric or date-like often enough that letting Excel infer a type silently
+    rewrites the value the mapping is supposed to preserve.
+    """
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font
+    except ImportError as exc:
+        raise MappingServiceError(
+            "openpyxl is required to export .xlsx mapping tables"
+        ) from exc
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = sheet[:31] or "mapping"
+    worksheet.append(list(fields))
+    for cell in worksheet[1]:
+        cell.font = Font(bold=True)
+    widths = [len(field) for field in fields]
+    for row in rows:
+        values = []
+        for index, field in enumerate(fields):
+            value = str(row.get(field, "") or "")
+            if len(value) > EXCEL_CELL_LIMIT:
+                raise MappingServiceError(
+                    f"Value for {field!r} exceeds the Excel cell limit; export the CSV instead"
+                )
+            widths[index] = max(widths[index], min(len(value), 60))
+            values.append(value)
+        worksheet.append(values)
+        for cell in worksheet[worksheet.max_row]:
+            # Leading "=", "+" or "-" would otherwise be stored as a formula.
+            cell.data_type = "s"
+    for index, width in enumerate(widths, start=1):
+        worksheet.column_dimensions[worksheet.cell(row=1, column=index).column_letter].width = width + 2
+    worksheet.freeze_panes = "A2"
+    workbook.save(path)
+
+
 def read_csv(path: Path) -> list[dict[str, str]]:
     with path.open(encoding="utf-8-sig", newline="", errors="replace") as handle:
         return [dict(row) for row in csv.DictReader(handle)]
@@ -258,8 +304,14 @@ def export_outputs(*, workspace: Path, council: str, batch: str, output_director
     exported_audit_path = output_directory / f"{prefix}-mapping-audit.csv"
     exported_spec_path = output_directory / "routing-spec.json"
     report_path = output_directory / "mapping-run-report.json"
+    full_mapping_xlsx_path = output_directory / f"{prefix}_full_mapping.xlsx"
+    mappingj_xlsx_path = output_directory / f"{prefix}_mappingj.xlsx"
     write_csv(mapping_total_path, mapping_total_rows, MAPPING_TOTAL_FIELDS)
     write_csv(mappingj_path, mappingj_rows, MAPPINGJ_FIELDS)
+    # The CSVs stay the runtime contract that file-browser reads; the workbooks
+    # are the human-facing deliverable and must not diverge from them.
+    write_xlsx(full_mapping_xlsx_path, mapping_total_rows, MAPPING_TOTAL_FIELDS, sheet="full mapping")
+    write_xlsx(mappingj_xlsx_path, mappingj_rows, MAPPINGJ_FIELDS, sheet="mapping")
     shutil.copy2(audit_path, exported_audit_path)
     shutil.copy2(spec_path, exported_spec_path)
     validation = json.loads(validation_path.read_text(encoding="utf-8"))
@@ -283,6 +335,8 @@ def export_outputs(*, workspace: Path, council: str, batch: str, output_director
         "outputs": {
             "mapping_total": str(mapping_total_path),
             "mappingj": str(mappingj_path),
+            "full_mapping_xlsx": str(full_mapping_xlsx_path),
+            "mappingj_xlsx": str(mappingj_xlsx_path),
             "audit": str(exported_audit_path),
             "routing_spec": str(exported_spec_path),
             "run_report": str(report_path),
@@ -419,7 +473,169 @@ def run_mapping(payload: dict[str, Any]) -> dict[str, Any]:
     report["selected_capture_rules"] = [str(path) for path in rule_paths]
     report["selected_s3_inventory"] = [str(path) for path in s3_paths]
     report["selected_portal_evidence"] = [str(path) for path in portal_paths]
+    # export_outputs wrote the report before these run-level fields existed. The
+    # quality loop reads the report from disk to find the audit and source it
+    # must review, so the file has to carry what the response carries.
+    Path(report["outputs"]["run_report"]).write_text(
+        json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
     return report
+
+
+QUALITY_LOOP_DIRNAME = "quality-loop"
+QUALITY_REPORT_DIRNAME = "quality-report"
+
+
+def quality_state_path(council: str, batch: str) -> Path:
+    """One loop per council and batch, so the split survives every re-run."""
+    return (
+        DATA_ROOT
+        / council
+        / "file-matching"
+        / QUALITY_LOOP_DIRNAME
+        / f"{slug(batch, label='batch')}.json"
+    )
+
+
+def load_run_report(run_directory: Path) -> dict[str, Any]:
+    report_path = run_directory / "mapping-run-report.json"
+    if not report_path.is_file():
+        raise MappingServiceError(
+            f"{run_directory} is not a mapping run directory; mapping-run-report.json is absent"
+        )
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    if not isinstance(report, dict):
+        raise MappingServiceError("mapping-run-report.json must contain an object")
+    return report
+
+
+def run_quality(payload: dict[str, Any]) -> dict[str, Any]:
+    """Review one sample of a completed mapping run and judge it.
+
+    A working round tests cases the spec may still be adjusted against; the
+    acceptance round tests the reserved holdout and is the only round whose
+    result describes the mapping rather than the loop.
+    """
+    from autonomous.content_qa import IdentityFieldProfile
+    from autonomous.content_reviewer import ContentQaReviewer, ReviewerSettings
+    from autonomous.quality_gate import GateThresholds
+    from autonomous.quality_loop import (
+        ACCEPTANCE,
+        WORKING,
+        load_audit_rows,
+        load_round_records,
+        next_action,
+        open_state,
+        run_quality_round,
+        write_report,
+    )
+
+    council = slug(str(payload.get("council") or ""), label="council")
+    batch = str(payload.get("batch") or "").strip()
+    if not batch:
+        raise MappingServiceError("batch is required")
+    run_directory = safe_data_path(str(payload.get("run_directory") or ""), kind="directory")
+    report = load_run_report(run_directory)
+
+    stage = str(payload.get("stage") or WORKING).strip().lower()
+    if stage not in {WORKING, ACCEPTANCE}:
+        raise MappingServiceError(f"stage must be {WORKING!r} or {ACCEPTANCE!r}")
+
+    outputs = report.get("outputs") or {}
+    audit_path = safe_data_path(str(outputs.get("audit") or ""))
+    explicit_source = list_value(payload.get("source_path"))
+    source_candidates = explicit_source or list_value(report.get("selected_source"))
+    if len(source_candidates) != 1:
+        raise MappingServiceError(
+            "Exactly one source table is required; supply source_path explicitly"
+        )
+    source_path = safe_data_path(source_candidates[0])
+
+    documents_root_value = str(payload.get("documents_root") or "").strip()
+    documents_root = safe_data_path(documents_root_value, kind="directory") if documents_root_value else None
+    acquire = bool(payload.get("acquire", documents_root is None))
+
+    settings = ReviewerSettings(
+        council=council,
+        batch=batch,
+        audit_path=audit_path,
+        source_path=source_path,
+        source_id_field=str(
+            payload.get("source_id_field") or "originating-authority-charge-identifier"
+        ),
+        source_original_name=str(payload.get("source_original_name") or "").strip(),
+        documents_root=documents_root,
+        acquire=acquire,
+        max_images_per_case=int(payload.get("max_images", 12)),
+        field_profile=IdentityFieldProfile(
+            reference_fields=tuple(list_value(payload.get("reference_field"))),
+            address_fields=tuple(list_value(payload.get("address_field"))),
+            description_fields=tuple(list_value(payload.get("description_field"))),
+            date_fields=tuple(list_value(payload.get("date_field"))),
+            document_type_fields=tuple(list_value(payload.get("document_type_field"))),
+        ),
+    )
+
+    thresholds = GateThresholds(
+        min_verified_rate=float(payload.get("min_verified_rate", 0.95)),
+        max_verified_wrong=int(payload.get("max_verified_wrong", 0)),
+        max_systematic_failures=int(payload.get("max_systematic_failures", 0)),
+        max_missing_document_rate=float(payload.get("max_missing_document_rate", 0.10)),
+    )
+    thresholds.validate()
+
+    audit_rows = load_audit_rows(audit_path)
+    state_path = quality_state_path(council, batch)
+    state = open_state(
+        state_path,
+        council=council,
+        batch=batch,
+        audit_rows=audit_rows,
+        holdout_fraction=float(payload.get("holdout_fraction", 0.2)),
+    )
+
+    result = run_quality_round(
+        state=state,
+        state_path=state_path,
+        audit_rows=audit_rows,
+        reviewer=ContentQaReviewer(settings, repository_root=REPOSITORY_ROOT),
+        artifacts_root=run_directory / "quality-rounds",
+        stage=stage,
+        sample_size=int(payload.get("sample_size", 12)),
+        thresholds=thresholds,
+    )
+
+    response: dict[str, Any] = {
+        "council": council,
+        "batch": batch,
+        "run_directory": str(run_directory),
+        "production_published": False,
+        "state_path": str(state_path),
+        "sampling_plan": state.plan().describe(),
+        **result.describe(),
+        "next": next_action(result),
+    }
+
+    if bool(payload.get("write_report", True)) and not result.exhausted:
+        rounds, acceptance = load_round_records(state)
+        destination = write_report(
+            destination=run_directory / QUALITY_REPORT_DIRNAME,
+            state=state,
+            rounds=rounds,
+            acceptance=acceptance,
+            mapping_summary={
+                "case_count": report.get("case_count"),
+                "match_status_counts": report.get("match_status_counts"),
+                "source_type_counts": report.get("source_type_counts"),
+                "outputs": outputs,
+            },
+        )
+        response["quality_report"] = {
+            "directory": str(destination),
+            "html": str(destination / "index.html"),
+            "summary": str(destination / "quality-report.json"),
+        }
+    return response
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -453,7 +669,9 @@ class Handler(BaseHTTPRequestHandler):
         if not self.client_allowed():
             self.respond(HTTPStatus.FORBIDDEN, {"error": "forbidden_client"})
             return
-        if self.path != "/run":
+        handlers = {"/run": run_mapping, "/quality": run_quality}
+        handler = handlers.get(self.path)
+        if handler is None:
             self.respond(HTTPStatus.NOT_FOUND, {"error": "not_found"})
             return
         try:
@@ -467,11 +685,11 @@ class Handler(BaseHTTPRequestHandler):
                 self.respond(HTTPStatus.CONFLICT, {"error": "mapping_job_already_running"})
                 return
             try:
-                result = run_mapping(payload)
+                result = handler(payload)
             finally:
                 REQUEST_LOCK.release()
             self.respond(HTTPStatus.OK, result)
-        except (MappingServiceError, OSError, ValueError, subprocess.TimeoutExpired) as exc:
+        except (RuntimeError, OSError, ValueError, subprocess.TimeoutExpired) as exc:
             self.respond(
                 HTTPStatus.UNPROCESSABLE_ENTITY,
                 {"error": type(exc).__name__, "detail": str(exc), "production_published": False},

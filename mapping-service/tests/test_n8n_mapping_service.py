@@ -157,5 +157,56 @@ class N8nMappingServiceTests(unittest.TestCase):
             self.assertEqual(report["match_status_counts"], {"found": 1, "no_found": 1, "no_match": 0})
 
 
+class XlsxExportTests(unittest.TestCase):
+    def test_workbook_matches_the_csv_and_stores_every_cell_as_text(self) -> None:
+        from openpyxl import load_workbook
+
+        fields = ("batch", "originating-authority-charge-identifier", "amazons3_path")
+        rows = [
+            {"batch": "wp1", "originating-authority-charge-identifier": "00123", "amazons3_path": "s3://b/a.pdf"},
+            {"batch": "wp1", "originating-authority-charge-identifier": "-45", "amazons3_path": "=cmd|'/c calc'!A0"},
+        ]
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "out.xlsx"
+            MODULE.write_xlsx(path, rows, fields, sheet="full mapping")
+            worksheet = load_workbook(path).active
+
+            self.assertEqual([cell.value for cell in worksheet[1]], list(fields))
+            self.assertEqual(worksheet.freeze_panes, "A2")
+            for row_index, expected in enumerate(rows, start=2):
+                for column_index, field in enumerate(fields, start=1):
+                    cell = worksheet.cell(row=row_index, column=column_index)
+                    # A leading "=" or "-" must survive as text; letting Excel
+                    # infer a type would rewrite the mapped value.
+                    self.assertEqual(cell.value, expected[field])
+                    self.assertEqual(cell.data_type, "s")
+
+    def test_oversized_cell_is_refused_rather_than_silently_truncated(self) -> None:
+        fields = ("batch",)
+        rows = [{"batch": "x" * (MODULE.EXCEL_CELL_LIMIT + 1)}]
+        with tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaises(MODULE.MappingServiceError):
+                MODULE.write_xlsx(Path(temporary) / "out.xlsx", rows, fields, sheet="mapping")
+
+
+class QualityEndpointTests(unittest.TestCase):
+    def test_state_path_is_one_file_per_council_and_batch(self) -> None:
+        path = MODULE.quality_state_path("exeter", "Work Package 1")
+        self.assertEqual(path.name, "work-package-1.json")
+        self.assertIn("quality-loop", path.parts)
+
+    def test_a_directory_without_a_run_report_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaises(MODULE.MappingServiceError):
+                MODULE.load_run_report(Path(temporary))
+
+    def test_run_report_must_contain_an_object(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "mapping-run-report.json").write_text("[]", encoding="utf-8")
+            with self.assertRaises(MODULE.MappingServiceError):
+                MODULE.load_run_report(root)
+
+
 if __name__ == "__main__":
     unittest.main()
