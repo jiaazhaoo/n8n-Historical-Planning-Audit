@@ -41,3 +41,60 @@ than reaching a commit. Credentials themselves are never exported: n8n's
 The encryption key stays on the host in the n8n volume's `config` file. Nothing
 in this repository can decrypt a credential without it, so keep an independent
 copy of it — losing the host disk otherwise means losing every credential.
+
+## Encrypted backups
+
+`scripts/backup.sh` stops n8n for a few seconds, tars the data volume, encrypts
+the archive to the `n8n-backup` GPG key, restarts n8n, and commits the result to
+`backups/`:
+
+```bash
+./scripts/backup.sh
+```
+
+The archive excludes `storage/`, which holds regenerable execution binary
+artifacts and is roughly 100x the size of everything else (49 MB vs 508 KB).
+What it keeps is what defines the instance: `database.sqlite` (workflows,
+credentials, execution metadata), `config` (the n8n encryption key), and
+`nodes/`.
+
+n8n is stopped during the tar so SQLite checkpoints its write-ahead log and the
+archive is internally consistent. A `trap` restarts n8n even if the archive step
+fails. Before committing, the script re-reads the archive and aborts if it is
+still readable as a tar, so an unencrypted archive cannot reach a commit.
+
+Local retention is 14 archives (`N8N_BACKUP_KEEP`); every archive is also pushed
+to this repository.
+
+### Restoring
+
+```bash
+./scripts/restore.sh backups/n8n-2026-08-20T033000.tgz.gpg
+```
+
+Verified end to end on 2026-08-20: encrypt, decrypt, extract, `PRAGMA
+integrity_check` = ok, with all 3 workflows, 2 credentials and 18 execution
+records intact.
+
+### The backup key
+
+`scripts/backup-public-key.asc` is the public half and is safe to commit. The
+private half lives at `~/.config/n8n-backup/private-key.asc` (mode 600) and in
+the local GPG keyring.
+
+**Nothing in this repository can be read without that private key.** It is the
+single artifact protecting every backup, and it is currently on the same disk as
+the data it protects -- store an independent copy in a password manager. Because
+the archive contains n8n's own `config`, saving this one key also covers the n8n
+encryption key.
+
+## Scheduling
+
+Both jobs run from cron. `sudo` needs a password here and systemd *user* timers
+do not run while the user is logged out (`Linger=no`), so cron is the option
+that works unattended:
+
+```cron
+30 3 * * * /env/code/n8n-Historical-Planning-Audit/scripts/backup.sh >> /home/rmsi/.local/log/n8n-backup.log 2>&1
+0  4 * * * /env/code/n8n-Historical-Planning-Audit/scripts/sync-workflows.sh >> /home/rmsi/.local/log/n8n-sync.log 2>&1
+```

@@ -4,10 +4,10 @@ config
 database.sqlite
 database.sqlite-*
 
-# Backup archives must be encrypted before they can be committed.
-backups/*.tgz
-backups/*.tar
-backups/*.zip
+# Backup archives must be encrypted before they can be committed, so the
+# whole directory is ignored and only GPG-encrypted archives are allowed back in.
+backups/*
+!backups/*.tgz.gpg
 
 # OS/editor files
 .DS_Store
