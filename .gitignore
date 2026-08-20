@@ -1,0 +1,13 @@
+# Local secrets and n8n runtime state
+.env
+config
+database.sqlite
+database.sqlite-*
+
+# Backup archives must be encrypted before they can be committed.
+backups/*.tgz
+backups/*.tar
+backups/*.zip
+
+# OS/editor files
+.DS_Store
