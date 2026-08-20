@@ -523,7 +523,7 @@ def run_quality(payload: dict[str, Any]) -> dict[str, Any]:
     """
     from autonomous.content_qa import IdentityFieldProfile
     from autonomous.content_reviewer import ContentQaReviewer, ReviewerSettings
-    from autonomous.quality_gate import GateThresholds
+    from autonomous.quality_gate import GateThresholds, evaluate_coverage
     from autonomous.quality_loop import (
         ACCEPTANCE,
         WORKING,
@@ -615,6 +615,25 @@ def run_quality(payload: dict[str, Any]) -> dict[str, Any]:
         thresholds=thresholds,
     )
 
+    # Sample precision and population coverage answer different questions and
+    # are judged separately: a spec can be right about everything it accepted
+    # while accepting far too little to deliver.
+    coverage = evaluate_coverage(
+        report.get("match_status_counts"),
+        min_accepted_rate=float(payload.get("min_accepted_rate", 0.0)),
+        max_unmatched_rate=float(payload.get("max_unmatched_rate", 1.0)),
+    )
+    action = next_action(result)
+    if action.get("action") in {"accept", "publish"} and not coverage.passed:
+        action = {
+            "action": "adjust_spec",
+            "detail": (
+                "The reviewed sample was accurate, but the mapping did not resolve enough of "
+                "the population to publish."
+            ),
+            "focus": list(coverage.reasons),
+        }
+
     response: dict[str, Any] = {
         "council": council,
         "batch": batch,
@@ -625,7 +644,9 @@ def run_quality(payload: dict[str, Any]) -> dict[str, Any]:
         "budget": result.record.verification_report.get("budget"),
         "model": result.record.verification_report.get("model"),
         **result.describe(),
-        "next": next_action(result),
+        "coverage": coverage.describe(),
+        "passed": result.outcome.passed and coverage.passed,
+        "next": action,
     }
 
     if bool(payload.get("write_report", True)) and not result.exhausted:
@@ -637,6 +658,7 @@ def run_quality(payload: dict[str, Any]) -> dict[str, Any]:
             acceptance=acceptance,
             mapping_summary={
                 "case_count": report.get("case_count"),
+                "coverage": coverage.describe(),
                 "match_status_counts": report.get("match_status_counts"),
                 "source_type_counts": report.get("source_type_counts"),
                 "outputs": outputs,

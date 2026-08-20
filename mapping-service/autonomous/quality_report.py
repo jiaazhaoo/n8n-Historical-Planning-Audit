@@ -236,6 +236,19 @@ def render_quality_report(
         headline = "Failed on the holdout sample"
         detail = "The mapping did not clear the gate on cases it was never tuned against."
 
+    # A sample can only speak for cases the mapping accepted. Coverage says how
+    # many that was, and is shown next to the verdict so a high pass rate over a
+    # thin slice cannot read as a clean result.
+    coverage = mapping_summary.get("coverage") or {}
+    coverage_metrics = coverage.get("metrics") or {}
+    if coverage_metrics and not coverage.get("passed", True):
+        headline = f"{headline} — but coverage is short"
+        detail = (
+            f"{detail} Only {coverage_metrics.get('accepted', 0)} of "
+            f"{coverage_metrics.get('population', 0)} cases were resolved at all."
+        )
+        passed = False
+
     plan_summary = plan.describe()
     rounds_html = "".join(
         f"""<tr>
@@ -290,11 +303,30 @@ def render_quality_report(
 
 <div class="grid">
   {_stat(mapping_summary.get('case_count', '—'), 'cases mapped')}
+  {_stat(f"{coverage_metrics.get('accepted_rate', 0):.0%}" if coverage_metrics else '—', 'resolved (coverage)')}
   {_stat(plan_summary['working_cases'], 'working pool')}
   {_stat(plan_summary['holdout_cases'], 'holdout (reserved)')}
   {_stat(len(all_rounds), 'review rounds')}
   {_stat(sum(len(record.case_results) for record in all_rounds), 'cases reviewed')}
 </div>
+
+<h2>Coverage</h2>
+<p class="muted">
+  Precision and coverage are judged separately. The reviewed sample shows whether accepted mappings
+  point at the right document; it cannot show how many cases were accepted, because a case the mapping
+  rejected has no document to review. Cases the source itself reports as having no scan are excluded
+  from the resolvable count, since no mapping spec can resolve them.
+</p>
+<table>
+  <tr><th>Population</th><td>{coverage_metrics.get('population', '—')}</td></tr>
+  <tr><th>Resolved</th><td>{coverage_metrics.get('accepted', '—')}
+      ({coverage_metrics.get('accepted_rate', 0):.1%} of population,
+       {coverage_metrics.get('accepted_rate_of_resolvable', 0):.1%} of resolvable)</td></tr>
+  <tr><th>Unmatched by the spec</th><td>{coverage_metrics.get('unmatched', '—')}
+      ({coverage_metrics.get('unmatched_rate', 0):.1%})</td></tr>
+  <tr><th>Source reports no scan</th><td>{coverage_metrics.get('source_reports_no_scan', '—')}
+      <span class="muted">— not a mapping defect</span></td></tr>
+</table>
 
 <h2>Sampling design</h2>
 <p class="muted">
@@ -347,6 +379,7 @@ def render_quality_report(
                 "generated_at": generated_at,
                 "passed": passed,
                 "acceptance_reviewed": acceptance is not None,
+                "coverage": coverage,
                 "sampling_plan": plan_summary,
                 "rounds": [record.describe() for record in all_rounds],
                 "mapping_summary": mapping_summary,

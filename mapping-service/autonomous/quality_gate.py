@@ -91,6 +91,83 @@ class GateOutcome:
         }
 
 
+@dataclass(frozen=True)
+class CoverageOutcome:
+    """How much of the population the mapping actually resolved.
+
+    The sample gate measures whether accepted mappings are right. It cannot
+    measure how many cases were accepted at all, because cases the mapping
+    rejected are `not_applicable` to a content review. A spec that accepts a
+    small fraction of the population and gets those right therefore passes the
+    sample gate while delivering almost nothing, so coverage is judged here,
+    against the whole population, and reported separately.
+    """
+
+    passed: bool
+    metrics: dict[str, Any]
+    reasons: tuple[str, ...] = ()
+
+    def describe(self) -> dict[str, Any]:
+        return {"passed": self.passed, "metrics": self.metrics, "reasons": list(self.reasons)}
+
+
+def evaluate_coverage(
+    match_status_counts: dict[str, Any] | None,
+    *,
+    min_accepted_rate: float = 0.0,
+    max_unmatched_rate: float = 1.0,
+) -> CoverageOutcome:
+    """Judge population coverage from the mapping run's own status counts.
+
+    `no_found` means the source itself reports no scan, which no spec can fix,
+    so it is reported but never counted against the mapping. `no_match` is the
+    spec failing to resolve a case that should have resolved.
+    """
+    counts = {key: int(value or 0) for key, value in (match_status_counts or {}).items()}
+    found = counts.get("found", 0)
+    no_found = counts.get("no_found", 0)
+    no_match = counts.get("no_match", 0)
+    total = found + no_found + no_match
+
+    accepted_rate = found / total if total else 0.0
+    unmatched_rate = no_match / total if total else 0.0
+    resolvable = found + no_match
+    accepted_of_resolvable = found / resolvable if resolvable else 0.0
+
+    reasons: list[str] = []
+    if not total:
+        reasons.append("The mapping run reported no cases; coverage cannot be judged")
+    if total and accepted_rate < min_accepted_rate:
+        reasons.append(
+            f"Accepted rate {accepted_rate:.2%} is below the required {min_accepted_rate:.2%}; "
+            "the mapping is accurate on what it accepted but resolved too little to deliver"
+        )
+    if total and unmatched_rate > max_unmatched_rate:
+        reasons.append(
+            f"Unmatched rate {unmatched_rate:.2%} exceeds {max_unmatched_rate:.2%}"
+        )
+
+    return CoverageOutcome(
+        passed=not reasons,
+        metrics={
+            "population": total,
+            "accepted": found,
+            "source_reports_no_scan": no_found,
+            "unmatched": no_match,
+            "accepted_rate": round(accepted_rate, 4),
+            "unmatched_rate": round(unmatched_rate, 4),
+            # Excludes cases the source itself says have no scan, so this is the
+            # share of genuinely resolvable cases the spec resolved.
+            "accepted_rate_of_resolvable": round(accepted_of_resolvable, 4),
+            "thresholds": {
+                "min_accepted_rate": min_accepted_rate,
+                "max_unmatched_rate": max_unmatched_rate,
+            },
+        },
+        reasons=tuple(reasons),
+    )
+
+
 def _verdict(result: dict[str, Any]) -> str:
     value = result.get("verdict")
     return str(getattr(value, "value", value) or "").strip()

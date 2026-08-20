@@ -13,6 +13,7 @@ if str(AUTONOMOUS_ROOT) not in sys.path:
 from autonomous.quality_gate import (  # noqa: E402
     GateThresholds,
     build_signatures,
+    evaluate_coverage,
     evaluate_gate,
 )
 from autonomous.quality_loop import (  # noqa: E402
@@ -282,6 +283,39 @@ class QualityGateTests(unittest.TestCase):
             evaluate_gate([], thresholds=GateThresholds(min_verified_rate=0.0))
 
 
+class CoverageGateTests(unittest.TestCase):
+    def test_an_accurate_but_thin_mapping_fails_coverage(self) -> None:
+        # The precision gate passes this: everything it accepted was correct.
+        results = [case_result(f"C{index}", "verified_same") for index in range(3)]
+        results += [case_result(f"R{index}", "not_applicable") for index in range(17)]
+        self.assertTrue(evaluate_gate(results).passed)
+
+        coverage = evaluate_coverage(
+            {"found": 3, "no_found": 2, "no_match": 15}, min_accepted_rate=0.5
+        )
+        self.assertFalse(coverage.passed)
+        self.assertTrue(any("resolved too little" in reason for reason in coverage.reasons))
+
+    def test_cases_the_source_says_have_no_scan_are_not_held_against_the_spec(self) -> None:
+        coverage = evaluate_coverage({"found": 40, "no_found": 55, "no_match": 5})
+        self.assertAlmostEqual(coverage.metrics["accepted_rate"], 0.40)
+        self.assertAlmostEqual(coverage.metrics["accepted_rate_of_resolvable"], 40 / 45, places=4)
+
+    def test_coverage_is_reported_even_when_no_floor_is_set(self) -> None:
+        coverage = evaluate_coverage({"found": 1, "no_found": 0, "no_match": 99})
+        self.assertTrue(coverage.passed)
+        self.assertAlmostEqual(coverage.metrics["unmatched_rate"], 0.99)
+
+    def test_an_unmatched_ceiling_can_fail_the_run(self) -> None:
+        coverage = evaluate_coverage(
+            {"found": 1, "no_found": 0, "no_match": 99}, max_unmatched_rate=0.2
+        )
+        self.assertFalse(coverage.passed)
+
+    def test_an_empty_population_cannot_be_judged(self) -> None:
+        self.assertFalse(evaluate_coverage({}).passed)
+
+
 class LoopStateTests(unittest.TestCase):
     def test_holdout_stays_frozen_when_the_mapping_changes_strata(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -477,6 +511,33 @@ class QualityReportTests(unittest.TestCase):
             html = (destination / "index.html").read_text(encoding="utf-8")
             self.assertIn("No independent acceptance sample", html)
             self.assertFalse(json.loads((destination / "quality-report.json").read_text())["passed"])
+
+    def test_a_short_coverage_downgrades_a_passing_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            rows = population()
+            state_path = Path(temporary) / "state.json"
+            state = open_state(state_path, council="exeter", batch="wp1", audit_rows=rows)
+            results = tuple(case_result(f"CASE-{i:03d}", "verified_same") for i in range(4))
+            record = RoundRecord(
+                index=1, label="round 1", case_results=results, outcome=evaluate_gate(results)
+            )
+            destination = Path(temporary) / "quality-report"
+            write_report(
+                destination=destination,
+                state=state,
+                rounds=[record],
+                acceptance=record,
+                mapping_summary={
+                    "case_count": 100,
+                    "coverage": evaluate_coverage(
+                        {"found": 15, "no_found": 5, "no_match": 80}, min_accepted_rate=0.5
+                    ).describe(),
+                },
+            )
+            html = (destination / "index.html").read_text(encoding="utf-8")
+            summary = json.loads((destination / "quality-report.json").read_text())
+            self.assertIn("coverage is short", html)
+            self.assertFalse(summary["passed"])
 
     def test_report_escapes_case_content(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
