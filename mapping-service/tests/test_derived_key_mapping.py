@@ -202,6 +202,37 @@ class NormalizerVocabularyTests(unittest.TestCase):
         self.assertEqual(key.source_key("TVN.10"), ("TVN", "00010"))
 
 
+class KeyFailureExplanationTests(unittest.TestCase):
+    def test_a_part_name_holding_two_formats_is_named_as_the_cause(self) -> None:
+        # A compiler wrote {year} for the reference's two-digit year and for the
+        # folder's four-digit year, then normalised "year" with year2to4. The
+        # source side worked and the inventory side silently produced no key.
+        key = DerivedKey(
+            source_templates=("{year:d}/{number:d}/{type:a}",),
+            inventory_templates=("EXE_{year:d}_{shortyear:d}-{number:d}-{suffix}",),
+            inventory_match_mode="prefix",
+            key_parts=("year", "number"),
+            part_normalizers=(
+                {"part": "year", "normalizers": ("year2to4",)},
+                {"part": "number", "normalizers": ("strip_zeros",)},
+            ),
+            part_defaults=({"part": "shortyear", "value": ""}, {"part": "suffix", "value": ""}),
+        ).build()
+        self.assertEqual(key.source_key("88/1061/FUL"), ("1988", "1061"))
+        self.assertIsNone(key.inventory_key("EXE_1988_88-1061-02"))
+        explanation = key.explain("EXE_1988_88-1061-02", side="inventory")
+        self.assertIn("year='1988'", explanation)
+        self.assertIn("same format on each", explanation)
+
+    def test_a_value_no_template_matches_is_named_as_such(self) -> None:
+        explanation = EXETER_KEY.build().explain("TPO 5/2011", side="source")
+        self.assertIn("no source template matched", explanation)
+
+    def test_a_working_value_is_reported_as_working(self) -> None:
+        explanation = EXETER_KEY.build().explain("88/1061/FUL", side="source")
+        self.assertIn("keys without error", explanation)
+
+
 class DerivedKeyValidationTests(unittest.TestCase):
     def test_a_key_part_absent_from_one_side_is_refused(self) -> None:
         with self.assertRaises(ValueError):

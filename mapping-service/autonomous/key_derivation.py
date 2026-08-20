@@ -235,6 +235,24 @@ class KeyDerivation:
     def inventory_key(self, value: str) -> tuple[str, ...] | None:
         return self._key(self._first_parse(self.inventory_templates, value))
 
+    def explain(self, value: str, *, side: str) -> str:
+        """Say why a value produced no key, for a spec that joins nothing."""
+        templates = self.source_templates if side == "source" else self.inventory_templates
+        parts = self._first_parse(templates, value)
+        if parts is None:
+            return f"no {side} template matched {value!r}"
+        for name in self.key_parts:
+            raw = parts.get(name, self.defaults.get(name, ""))
+            try:
+                normalise(raw, self.normalizers.get(name, ()), year_pivot=self.year_pivot)
+            except DerivationError as exc:
+                return (
+                    f"{side} part {name}={raw!r} rejected its normalisers: {exc}. "
+                    "A part name carries one set of normalisers on both sides, so the same name "
+                    "must hold the same format on each; name the two differently if it does not."
+                )
+        return f"{side} value {value!r} keys without error"
+
     def inventory_value_for(self, source_value: str) -> str | None:
         """Render the inventory-side text a source value should match.
 

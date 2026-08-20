@@ -171,7 +171,15 @@ def derived_key_join_errors(
             f"route {route.rule_id}: derived key joins {joined}/{len(selected)} routed cases "
             f"({rate:.1%}); {keyed} produced a key and the inventory yielded {len(index)} distinct keys"
         )
-        if joined == 0 and len(selected) >= 20 and len(index) >= 20:
+        if not index and len(inventory_rows) >= 20:
+            # No inventory row keyed at all. That is never a property of the
+            # data; the inventory side of the derivation is simply wrong.
+            sample = str(inventory_rows[0].get(key_field) or "")
+            errors.append(
+                f"route {route.rule_id}: the derived key produces no key for any of "
+                f"{len(inventory_rows)} inventory rows. {derivation.explain(sample, side='inventory')}"
+            )
+        elif joined == 0 and len(selected) >= 20 and len(index) >= 20:
             errors.append(
                 f"route {route.rule_id}: the derived key joins none of {len(selected)} routed cases "
                 f"against {len(index)} inventory keys. Check that every part in key_parts means the "
