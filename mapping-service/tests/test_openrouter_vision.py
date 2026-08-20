@@ -134,7 +134,7 @@ class OpenRouterVisionExtractorTests(unittest.TestCase):
         root = Path(temporary)
         image = make_image(root / "images" / "page-01.jpg")
         extractor = OpenRouterVisionExtractor(
-            OpenRouterSettings(api_key="sk-or-v1-test"),
+            OpenRouterSettings(api_key="sk-or-v1-test", retry_backoff_seconds=0),
             budget=budget or ReviewBudget(),
             transport=transport,
         )
@@ -214,12 +214,48 @@ class OpenRouterVisionExtractorTests(unittest.TestCase):
             failed = list(Path(temporary).rglob("observation.failed.json"))
             self.assertTrue(failed)
 
-    def test_an_empty_choice_list_is_refused(self) -> None:
+    def test_a_provider_error_returned_with_http_200_is_retried(self) -> None:
+        # OpenRouter delivers upstream failures inside a normal response, with
+        # finish_reason "error" and zero usage. Observed live on 2026-08-20.
+        soft_error = {
+            "model": DEFAULT_MODEL,
+            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "cost": 0},
+            "choices": [{"finish_reason": "error", "message": {"content": None}}],
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            budget = ReviewBudget(limit_usd=3.0)
+            transport = RecordingTransport([soft_error, response(cost=0.004)])
+            extractor, (observation, _) = self._extract(transport, budget, temporary)
+            self.assertTrue(observation.readable)
+            self.assertEqual(len(transport.payloads), 2)
+            # Only the call that produced content is charged.
+            self.assertAlmostEqual(budget.spent_usd, 0.004)
+
+    def test_a_persistent_provider_error_still_fails(self) -> None:
+        soft_error = {
+            "model": DEFAULT_MODEL,
+            "usage": {},
+            "choices": [{"finish_reason": "error", "message": {"content": None}}],
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaises(OpenRouterError):
+                self._extract(RecordingTransport([soft_error] * 3), None, temporary)
+
+    def test_an_error_field_in_the_body_is_retried(self) -> None:
+        body_error = {"error": {"code": 502, "message": "upstream unavailable"}}
+        with tempfile.TemporaryDirectory() as temporary:
+            transport = RecordingTransport([body_error, response()])
+            self._extract(transport, None, temporary)
+            self.assertEqual(len(transport.payloads), 2)
+
+    def test_an_empty_choice_list_is_retried_then_refused(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             empty = dict(response())
             empty["choices"] = []
+            transport = RecordingTransport([empty] * 3)
             with self.assertRaises(OpenRouterError):
-                self._extract(RecordingTransport([empty]), None, temporary)
+                self._extract(transport, None, temporary)
+            self.assertEqual(len(transport.payloads), 3)
 
     def test_review_without_images_is_refused(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

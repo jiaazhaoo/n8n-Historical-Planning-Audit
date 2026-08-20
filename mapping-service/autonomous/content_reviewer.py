@@ -12,11 +12,17 @@ testable, without the vision stack, the registry, or network credentials.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Sequence
 
-from .acquisition import AcquisitionLimits, BoundedAcquirer, RegisteredPortalAdapter
+from .acquisition import (
+    AcquisitionLimits,
+    BoundedAcquirer,
+    MAX_ACCEPTED_CASES_PER_BATCH,
+    RegisteredPortalAdapter,
+)
+from .schemas import AcquisitionBatchReport
 from .content_qa import ContentQaConfig, IdentityFieldProfile, run_content_qa
 from .openrouter_vision import (
     DEFAULT_MODEL,
@@ -24,6 +30,8 @@ from .openrouter_vision import (
     OpenRouterVisionExtractor,
     read_api_key,
 )
+from .ocr_extractor import PaddleOcrObservationExtractor
+from .paddle_ocr import PaddleOcrRunner
 from .review_budget import DEFAULT_ESTIMATE_USD_PER_CASE, DEFAULT_LIMIT_USD, ReviewBudget
 from .storage import ArtifactStore
 
@@ -45,6 +53,12 @@ class ReviewerSettings:
     documents_root: Path | None = None
     acquire: bool = True
     max_images_per_case: int = 12
+    # Archival microfiche frames are far larger than a page scan. Measured over
+    # 219 real Exeter WP1 frames on 2026-08-20: median 6.9 MP, but 5.9% of them
+    # are 52-56 MP large-format frames that a 40 MP guard rejects outright. The
+    # guard exists to stop decompression bombs, which are orders of magnitude
+    # larger again, so it is raised to clear genuine scans with headroom.
+    max_image_pixels: int = 80_000_000
     field_profile: IdentityFieldProfile = IdentityFieldProfile()
     aws_region: str = "eu-west-2"
     portal_request_interval: float = 5.0
@@ -56,6 +70,9 @@ class ReviewerSettings:
     model: str = DEFAULT_MODEL
     budget_usd: float = DEFAULT_LIMIT_USD
     estimate_usd_per_case: float = DEFAULT_ESTIMATE_USD_PER_CASE
+    # "ocr" reads pages locally with PaddleOCR and sends only their text;
+    # "vision" sends the page images themselves.
+    extractor_mode: str = "ocr"
 
     def validate(self) -> None:
         if not self.acquire and self.documents_root is None:
@@ -64,6 +81,115 @@ class ReviewerSettings:
             )
         if self.budget_usd <= 0:
             raise ContentReviewError("budget_usd must be positive")
+        if self.extractor_mode not in {"ocr", "vision"}:
+            raise ContentReviewError(
+                f"extractor_mode must be 'ocr' or 'vision', got {self.extractor_mode!r}"
+            )
+
+
+class ChunkedAcquirer:
+    """Acquire a sample larger than one bounded batch, without unbounding it.
+
+    `BoundedAcquirer` accepts at most five accepted cases per call. That ceiling
+    made a review as small as the acquisition batch, which is too thin for a
+    stratified sample to say anything. Here the sample is acquired in successive
+    batches instead, and the byte ceiling -- the limit that actually bounds how
+    much data leaves the bucket -- is carried across them and decremented, so
+    the total egress stays within one `max_total_bytes` no matter how many
+    batches it takes.
+    """
+
+    def __init__(
+        self,
+        *,
+        run_id: str,
+        council: str,
+        batch: str,
+        limits: AcquisitionLimits,
+        aws_region: str,
+        portal_adapter: RegisteredPortalAdapter,
+    ) -> None:
+        self.run_id = run_id
+        self.council = council
+        self.batch = batch
+        self.limits = limits
+        self.aws_region = aws_region
+        self.portal_adapter = portal_adapter
+        self.documents_root: Path | None = None
+
+    def _batches(self, expectations: Sequence[Any]) -> list[tuple[Any, ...]]:
+        """Group so no batch holds more accepted cases than one call allows."""
+        batches: list[list[Any]] = []
+        current: list[Any] = []
+        accepted_in_current = 0
+        for expectation in expectations:
+            if expectation.accepted and accepted_in_current >= MAX_ACCEPTED_CASES_PER_BATCH:
+                batches.append(current)
+                current, accepted_in_current = [], 0
+            current.append(expectation)
+            accepted_in_current += int(bool(expectation.accepted))
+        if current:
+            batches.append(current)
+        return [tuple(item) for item in batches]
+
+    def acquire(self, expectations: tuple[Any, ...], artifacts: ArtifactStore):
+        batches = self._batches(expectations)
+        remaining_bytes = self.limits.max_total_bytes
+        reports: list[AcquisitionBatchReport] = []
+        for index, group in enumerate(batches, start=1):
+            if remaining_bytes <= 0:
+                break
+            limits = replace(
+                self.limits,
+                max_accepted_cases=min(
+                    MAX_ACCEPTED_CASES_PER_BATCH,
+                    max(1, sum(1 for item in group if item.accepted)),
+                ),
+                max_total_bytes=remaining_bytes,
+                max_case_bytes=min(self.limits.max_case_bytes, remaining_bytes),
+                max_file_bytes=min(self.limits.max_file_bytes, remaining_bytes),
+            )
+            acquirer = BoundedAcquirer(
+                run_id=f"{self.run_id}-acq{index:02d}",
+                council=self.council,
+                batch=self.batch,
+                limits=limits,
+                aws_region=self.aws_region,
+                portal_adapter=self.portal_adapter,
+            )
+            report = acquirer.acquire(group, artifacts)
+            self.documents_root = acquirer.documents_root
+            remaining_bytes -= report.bytes_completed
+            reports.append(report)
+
+        if not reports:
+            raise ContentReviewError("Acquisition produced no batches")
+
+        status_counts: dict[str, int] = {}
+        for report in reports:
+            for status, count in report.status_counts.items():
+                status_counts[status] = status_counts.get(status, 0) + count
+        merged = AcquisitionBatchReport(
+            run_id=self.run_id,
+            council=self.council,
+            batch=self.batch,
+            requested_cases=sum(item.requested_cases for item in reports),
+            accepted_cases=sum(item.accepted_cases for item in reports),
+            files_completed=sum(item.files_completed for item in reports),
+            bytes_completed=sum(item.bytes_completed for item in reports),
+            status_counts=status_counts,
+            case_reports=tuple(
+                case for report in reports for case in report.case_reports
+            ),
+            documents_root=reports[-1].documents_root,
+            generated_at=reports[-1].generated_at,
+        )
+        # The per-batch file is overwritten by each batch; keep the merged view
+        # as the one the verification report cites.
+        artifacts.write_mutable_json(
+            "qa/acquisition/report.json", merged.model_dump(mode="json")
+        )
+        return merged
 
 
 class ContentQaReviewer:
@@ -117,18 +243,19 @@ class ContentQaReviewer:
             sample_size=min(max(len(include_ids), 1), 40),
             include_ids=tuple(include_ids),
             max_images_per_case=settings.max_images_per_case,
+            max_image_pixels=settings.max_image_pixels,
             field_profile=settings.field_profile,
         )
         config.validate()
 
         artifacts = ArtifactStore(output_dir)
         acquirer = (
-            BoundedAcquirer(
+            ChunkedAcquirer(
                 run_id=run_id,
                 council=settings.council,
                 batch=settings.batch,
                 limits=AcquisitionLimits(
-                    max_accepted_cases=len(include_ids),
+                    max_accepted_cases=MAX_ACCEPTED_CASES_PER_BATCH,
                     max_objects_per_case=settings.max_objects_per_case,
                     max_file_bytes=settings.max_file_bytes,
                     max_case_bytes=settings.max_case_bytes,
@@ -143,12 +270,16 @@ class ContentQaReviewer:
             else None
         )
 
-        extractor = OpenRouterVisionExtractor(
-            OpenRouterSettings(
-                api_key=read_api_key(settings.openrouter_key_path),
-                model=settings.model,
-            ),
-            budget=budget,
+        openrouter = OpenRouterSettings(
+            api_key=read_api_key(settings.openrouter_key_path),
+            model=settings.model,
+        )
+        extractor = (
+            PaddleOcrObservationExtractor(
+                settings=openrouter, budget=budget, runner=PaddleOcrRunner()
+            )
+            if settings.extractor_mode == "ocr"
+            else OpenRouterVisionExtractor(openrouter, budget=budget)
         )
         report = run_content_qa(
             run_id=run_id,
@@ -169,6 +300,7 @@ class ContentQaReviewer:
         summary = report.model_dump(mode="json")
         summary["budget"] = budget.describe()
         summary["model"] = settings.model
+        summary["extractor_mode"] = settings.extractor_mode
         artifacts.write_mutable(
             "qa/review-budget.json",
             json.dumps(summary["budget"], ensure_ascii=False, indent=2).encode("utf-8"),

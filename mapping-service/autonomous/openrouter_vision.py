@@ -71,6 +71,7 @@ class OpenRouterSettings:
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS
     referer: str = "https://localhost/n8n-file-path-mapping"
     title: str = "council mapping content QA"
+    retry_backoff_seconds: float = 2.0
 
 
 class OpenRouterVisionExtractor:
@@ -105,11 +106,36 @@ class OpenRouterVisionExtractor:
         with urllib.request.urlopen(request, timeout=self.settings.timeout_seconds) as response:
             return json.loads(response.read().decode("utf-8"))
 
+    @staticmethod
+    def _soft_failure(response: dict) -> str | None:
+        """Detect a provider error delivered with a 200 status.
+
+        OpenRouter returns upstream failures inside a normal response: the
+        choice carries finish_reason "error", no content, and zero usage.
+        Treating that as a successful call turns a transient upstream blip into
+        a hard "empty observation" failure for the whole round, so it is
+        surfaced here and retried like any other transient error.
+        """
+        if response.get("error"):
+            return str(response["error"])[:300]
+        choices = response.get("choices") or []
+        if not choices:
+            return "response carried no choices"
+        choice = choices[0]
+        content = (choice.get("message") or {}).get("content")
+        if choice.get("finish_reason") == "error" or not (content or "").strip():
+            return f"finish_reason={choice.get('finish_reason')!r} with empty content"
+        return None
+
     def _call(self, payload: dict) -> dict:
         last_error: Exception | None = None
         for attempt in range(1, MAX_ATTEMPTS + 1):
             try:
-                return self._transport(payload)
+                response = self._transport(payload)
+                failure = self._soft_failure(response)
+                if failure is None:
+                    return response
+                last_error = OpenRouterError(f"OpenRouter returned no usable content: {failure}")
             except urllib.error.HTTPError as exc:
                 body = exc.read().decode("utf-8", errors="replace")[:2000]
                 # 4xx other than rate limiting will not improve on retry.
@@ -118,8 +144,8 @@ class OpenRouterVisionExtractor:
                 last_error = OpenRouterError(f"OpenRouter error {exc.code}: {body}")
             except (urllib.error.URLError, TimeoutError) as exc:
                 last_error = OpenRouterError(f"OpenRouter request failed: {exc}")
-            if attempt < MAX_ATTEMPTS:
-                time.sleep(2 ** attempt)
+            if attempt < MAX_ATTEMPTS and self.settings.retry_backoff_seconds > 0:
+                time.sleep(self.settings.retry_backoff_seconds ** attempt)
         raise last_error or OpenRouterError("OpenRouter request failed")
 
     def _build_payload(self, images: tuple[Path, ...], schema: dict) -> dict:
