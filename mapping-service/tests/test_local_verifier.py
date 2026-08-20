@@ -100,6 +100,34 @@ class OcrTextVerifierTests(unittest.TestCase):
         self.assertEqual(verdict, QaVerdict.VERIFIED_WRONG)
         self.assertIn("88/1002/FUL", reason)
 
+    def test_a_shared_locality_is_not_evidence_of_a_swap(self) -> None:
+        # Real finding: a sorting office on Alphinbrook Road and land off
+        # Manaton Close are both "Marsh Barton, Exeter". Matching on the shared
+        # words alone accused a correct mapping of being a swap.
+        mine = expectation(
+            "90/0335/ADV",
+            address="Post Office Sorting Office , Alphinbrook Road , Marsh Barton Trading Estate , Exeter",
+        )
+        theirs = expectation("89/0664/FUL", address="Land Off Manaton Close Marsh Barton Exeter")
+        runner = StoredRunner(FILLER + "\nPOST OFFICE SORTING OFFICE MARSH BARTON EXETER")
+        verifier = OcrTextVerifier(runner=runner)
+        verifier.prepare([mine, theirs])
+        verdict, _, _, _, _, _, _ = self._verify(verifier, mine)
+        self.assertNotEqual(verdict, QaVerdict.VERIFIED_WRONG)
+
+    def test_a_distinguishing_word_still_names_a_swap(self) -> None:
+        mine = expectation(
+            "90/0335/ADV",
+            address="Post Office Sorting Office , Alphinbrook Road , Marsh Barton Trading Estate , Exeter",
+        )
+        theirs = expectation("89/0664/FUL", address="Land Off Manaton Close Marsh Barton Exeter")
+        runner = StoredRunner(FILLER + "\nLAND OFF MANATON CLOSE MARSH BARTON EXETER")
+        verifier = OcrTextVerifier(runner=runner)
+        verifier.prepare([mine, theirs])
+        verdict, _, _, _, _, reason, _ = self._verify(verifier, mine)
+        self.assertEqual(verdict, QaVerdict.VERIFIED_WRONG)
+        self.assertIn("89/0664/FUL", reason)
+
     def test_an_unrelated_document_is_unconfirmed_rather_than_wrong(self) -> None:
         # Absence of the address is not evidence of a different record.
         runner = StoredRunner(FILLER + "\nSOME OTHER STREET ALTOGETHER")

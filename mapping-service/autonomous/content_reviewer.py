@@ -63,9 +63,13 @@ class ReviewerSettings:
     field_profile: IdentityFieldProfile = IdentityFieldProfile()
     aws_region: str = "eu-west-2"
     portal_request_interval: float = 5.0
-    max_objects_per_case: int = 100
+    max_objects_per_case: int = 250
     max_file_bytes: int = 128 * 1024 * 1024
     max_case_bytes: int = 512 * 1024 * 1024
+    # Scaled per case rather than fixed. Measured on Exeter WP3: a case averages
+    # about 19 MB, so a flat 512 MB budget starved a 30-case round and reported
+    # 12 unreviewable cases that were really just past the ceiling.
+    max_total_bytes_per_case: int = 64 * 1024 * 1024
     max_total_bytes: int = 512 * 1024 * 1024
     openrouter_key_path: Path = Path("/env/key/spatial_capture.keys.md")
     model: str = DEFAULT_MODEL
@@ -261,7 +265,10 @@ class ContentQaReviewer:
                     max_objects_per_case=settings.max_objects_per_case,
                     max_file_bytes=settings.max_file_bytes,
                     max_case_bytes=settings.max_case_bytes,
-                    max_total_bytes=settings.max_total_bytes,
+                    max_total_bytes=max(
+                        settings.max_total_bytes,
+                        settings.max_total_bytes_per_case * len(include_ids),
+                    ),
                 ),
                 aws_region=settings.aws_region,
                 portal_adapter=RegisteredPortalAdapter(

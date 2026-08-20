@@ -22,6 +22,7 @@ the text or does not.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Sequence
@@ -43,6 +44,11 @@ from .storage import ArtifactStore
 MIN_TEXT_CHARACTERS = 200
 
 NO_SIGNALS = {"reference": False, "address": False, "description": False, "date": False}
+
+
+def _address_words(value: str) -> set[str]:
+    """Words long enough to identify a place, lowercased."""
+    return {word for word in re.findall(r"[a-z']{4,}", value.lower())}
 
 
 def _usable(values: Sequence[str]) -> list[str]:
@@ -95,11 +101,29 @@ class OcrTextVerifier:
         }
 
     def _swapped_with(self, expectation: ContentExpectation, text: str) -> str | None:
+        """Name another sampled case only when the document says so distinctly.
+
+        Neighbouring records share a locality: "Marsh Barton, Exeter" appears in
+        both a sorting office on Alphinbrook Road and land off Manaton Close.
+        Matching on shared words alone accused a correct mapping of being a
+        swap, which is the most damaging verdict this gate can return, so the
+        evidence has to be a word that tells the two cases apart.
+        """
+        lowered = text.lower()
+        own = {
+            word
+            for value in _usable(expectation.address_values)
+            for word in _address_words(value)
+        }
         for oachargeid, addresses in self._addresses_by_case.items():
             if oachargeid == expectation.oachargeid:
                 continue
-            if any(address_matches(value, text) for value in addresses):
-                return oachargeid
+            for value in addresses:
+                if not address_matches(value, text):
+                    continue
+                distinguishing = _address_words(value) - own
+                if any(word in lowered for word in distinguishing):
+                    return oachargeid
         return None
 
     def verify(
