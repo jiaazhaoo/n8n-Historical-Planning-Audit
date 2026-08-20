@@ -289,6 +289,31 @@ def run_quality_round(
     )
 
 
+def shared_reason(
+    case_results: Sequence[dict[str, Any]], *, threshold: float = 0.5
+) -> tuple[str, int, int] | None:
+    """Return the reason most unverified cases give, when one dominates."""
+    unverified = [
+        result
+        for result in case_results
+        if str(getattr(result.get("verdict"), "value", result.get("verdict")) or "")
+        not in {"verified_same", "not_applicable"}
+    ]
+    if not unverified:
+        return None
+    counts: dict[str, int] = {}
+    for result in unverified:
+        reason = str(result.get("reason") or "").strip()
+        if reason:
+            counts[reason] = counts.get(reason, 0) + 1
+    if not counts:
+        return None
+    reason, count = max(counts.items(), key=lambda item: item[1])
+    if count < max(2, threshold * len(unverified)):
+        return None
+    return reason, count, len(unverified)
+
+
 def next_action(result: RoundResult) -> dict[str, Any]:
     """Say what the loop should do next, and what to look at if it must adjust."""
     if result.exhausted:
@@ -319,6 +344,22 @@ def next_action(result: RoundResult) -> dict[str, Any]:
             "action": "adjust_spec",
             "detail": "Repeated failures share a route and matching basis, which points at a rule.",
             "focus": focus,
+        }
+    # Signatures only group confirmed-wrong cases. A round can also fail because
+    # every case failed the same way without any being wrong -- a batch whose
+    # source carries nothing to check against, for instance -- and reporting
+    # that as "no shared signature" sends the reader case-hunting for a cause
+    # that is the same in all of them.
+    shared = shared_reason(result.record.case_results)
+    if shared:
+        reason, count, total = shared
+        return {
+            "action": "review_inputs",
+            "detail": (
+                f"{count} of {total} judged cases failed for the same reason, which points at the "
+                "batch rather than at individual mappings."
+            ),
+            "focus": [reason],
         }
     return {
         "action": "investigate_cases",

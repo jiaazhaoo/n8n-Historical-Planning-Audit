@@ -18,6 +18,7 @@ from autonomous.quality_gate import (  # noqa: E402
 )
 from autonomous.quality_loop import (  # noqa: E402
     ACCEPTANCE,
+    shared_reason,
     WORKING,
     QualityLoopError,
     next_action,
@@ -464,6 +465,67 @@ class QualityRoundTests(unittest.TestCase):
             saved = json.loads(state_path.read_text())
             self.assertEqual(len(saved["rounds"]), 1)
             self.assertIn("metrics", saved["rounds"][0])
+
+
+class SharedReasonTests(unittest.TestCase):
+    def _result(self, oid, verdict, reason=""):
+        row = case_result(oid, verdict)
+        row["reason"] = reason
+        return row
+
+    def test_one_dominant_reason_points_at_the_batch(self) -> None:
+        # Every Exeter WP1 case fails identically: the source states nothing to
+        # check the document against.
+        reason = "The source record states no address or description"
+        results = [self._result(f"C{i}", "rule_supported_unverified", reason) for i in range(9)]
+        results.append(self._result("C9", "not_applicable", "No accepted path"))
+        found = shared_reason(results)
+        self.assertIsNotNone(found)
+        self.assertEqual(found[0], reason)
+        self.assertEqual(found[1:], (9, 9))
+
+    def test_verified_cases_are_not_counted_as_failures(self) -> None:
+        results = [self._result(f"C{i}", "verified_same", "ok") for i in range(5)]
+        self.assertIsNone(shared_reason(results))
+
+    def test_scattered_reasons_do_not_count_as_shared(self) -> None:
+        results = [
+            self._result("A", "rule_supported_unverified", "reason one"),
+            self._result("B", "rule_supported_unverified", "reason two"),
+            self._result("C", "unreadable", "reason three"),
+        ]
+        self.assertIsNone(shared_reason(results))
+
+    def test_a_single_failure_is_not_a_shared_reason(self) -> None:
+        results = [
+            self._result("A", "rule_supported_unverified", "same"),
+            self._result("B", "verified_same", "ok"),
+        ]
+        self.assertIsNone(shared_reason(results))
+
+    def test_the_action_names_the_shared_reason(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            rows = population()
+            state_path = Path(temporary) / "state.json"
+            state = open_state(state_path, council="exeter", batch="wp1", audit_rows=rows)
+            reason = "The source record states no address or description"
+
+            class FlatReviewer:
+                def review(self, *, run_id, include_ids, output_dir):
+                    results = []
+                    for oid in include_ids:
+                        row = case_result(oid, "rule_supported_unverified")
+                        row["reason"] = reason
+                        results.append(row)
+                    return {}, results
+
+            result = run_quality_round(
+                state=state, state_path=state_path, audit_rows=rows,
+                reviewer=FlatReviewer(), artifacts_root=Path(temporary) / "a", sample_size=8,
+            )
+            action = next_action(result)
+            self.assertEqual(action["action"], "review_inputs")
+            self.assertIn(reason, action["focus"])
 
 
 class QualityReportTests(unittest.TestCase):
