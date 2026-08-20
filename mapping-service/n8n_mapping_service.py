@@ -38,33 +38,36 @@ JOBS_ROOT = DATA_ROOT / "mapping-jobs"
 CODEX_RUNTIME_HOME = JOBS_ROOT / "codex-runtime"
 CODEX_AUTH = Path("/home/rmsi/.codex/auth.json")
 
-PRIMARY_FIELDS = (
-    "council",
+MAPPING_TOTAL_FIELDS = (
     "batch",
     "originating-authority-charge-identifier",
-    "source_type",
-    "source_reference",
+    "further-information-reference",
+    "supplementary-information",
+    "charge-address",
+    "charge-geographic-description",
     "amazons3_path",
-    "amazons3_confidence",
+    "amazons3_path_cfd",
+    "amazons3_path_mappingrule",
+    "amazons3_path_note",
     "portal_path",
-    "match_status",
+    "portal_path_cfd",
+    "portal_path_mappingrule",
+    "portal_path_note",
+    "path_source",
+    "path_found",
 )
 
-WORKFLOW_FIELDS = (
-    "council",
+MAPPINGJ_FIELDS = (
     "batch",
     "originating-authority-charge-identifier",
-    "source_type",
-    "source_reference",
+    "further-information-reference",
+    "supplementary-information",
+    "charge-address",
+    "charge-geographic-description",
     "amazons3_path",
-    "amazons3_confidence",
-    "local_amazons3_path",
     "portal_path",
-    "local_portal_path",
-    "match_status",
-    "result_count",
-    "match_basis",
-    "match_reason",
+    "path_source",
+    "path_found",
 )
 
 SUPPORTED_TABLES = {".csv", ".json", ".jsonl", ".xlsx"}
@@ -162,29 +165,51 @@ def read_csv(path: Path) -> list[dict[str, str]]:
         return [dict(row) for row in csv.DictReader(handle)]
 
 
+def source_value(row: dict[str, str], field: str) -> str:
+    """Read a requested Landmark field without rewriting its source value."""
+    if field in row:
+        return (row.get(field) or "").strip()
+    normalized = re.sub(r"[^a-z0-9]+", "", field.casefold())
+    for key, value in row.items():
+        if re.sub(r"[^a-z0-9]+", "", key.casefold()) == normalized:
+            return (value or "").strip()
+    return ""
+
+
 def export_outputs(*, workspace: Path, council: str, batch: str, output_directory: Path) -> dict[str, Any]:
     mapping_path = workspace / "mapping" / "proposed-mapping.csv"
     audit_path = workspace / "mapping" / "mapping-audit.csv"
     spec_path = workspace / "spec" / "mapping-spec.json"
     validation_path = workspace / "validation" / "validation.json"
-    for path in (mapping_path, audit_path, spec_path, validation_path):
+    source_path = workspace / "prepared" / "source-records.csv"
+    for path in (mapping_path, audit_path, spec_path, validation_path, source_path):
         if not path.is_file():
             raise MappingServiceError(f"Mapping job did not produce required artifact: {path}")
 
     mappings = read_csv(mapping_path)
     audits = read_csv(audit_path)
+    source_rows = read_csv(source_path)
+    spec = json.loads(spec_path.read_text(encoding="utf-8"))
+    source_id_field = str(spec.get("source_id_field") or "oachargeid")
     if len(mappings) != len(audits):
         raise MappingServiceError("Mapping and audit row counts differ")
     audit_by_id = {row.get("oachargeid", ""): row for row in audits}
     if len(audit_by_id) != len(audits):
         raise MappingServiceError("Mapping audit contains blank or duplicate case identifiers")
+    source_by_id = {source_value(row, source_id_field): row for row in source_rows}
+    if len(source_by_id) != len(source_rows) or any(not oid for oid in source_by_id):
+        raise MappingServiceError("Source evidence contains blank or duplicate case identifiers")
 
-    full_rows: list[dict[str, str]] = []
+    mapping_total_rows: list[dict[str, str]] = []
+    mappingj_rows: list[dict[str, str]] = []
     for mapping in mappings:
         oid = (mapping.get("oachargeid") or "").strip()
         audit = audit_by_id.get(oid)
+        source = source_by_id.get(oid)
         if audit is None:
             raise MappingServiceError(f"Missing audit row for case {oid!r}")
+        if source is None:
+            raise MappingServiceError(f"Missing source row for case {oid!r}")
         raw_status = (audit.get("match_status") or "").strip()
         if raw_status.startswith("accepted_"):
             status = "found"
@@ -195,49 +220,57 @@ def export_outputs(*, workspace: Path, council: str, batch: str, output_director
         route = (audit.get("route") or "").strip()
         source_type = "amazons3" if route == "s3" else ("portal" if route == "portal" else "")
         reason = (audit.get("rejection_reason") or "").strip() or raw_status
-        full_rows.append(
-            {
-                "council": council,
+        amazon_path = (mapping.get("amazons3_path") or "").strip()
+        portal_path = (mapping.get("portal_path") or "").strip()
+        row = {
                 "batch": batch,
                 "originating-authority-charge-identifier": oid,
-                "source_type": source_type,
-                "source_reference": (audit.get("authoritative_value") or "").strip(),
-                "amazons3_path": (mapping.get("amazons3_path") or "").strip(),
-                "amazons3_confidence": (mapping.get("amazons3_confidence") or "0.00").strip(),
-                "local_amazons3_path": "",
-                "portal_path": (mapping.get("portal_path") or "").strip(),
-                "local_portal_path": "",
-                "match_status": status,
-                "result_count": (audit.get("candidate_count") or "0").strip(),
-                "match_basis": (audit.get("match_basis") or "").strip(),
-                "match_reason": reason,
+                "further-information-reference": source_value(source, "further-information-reference"),
+                "supplementary-information": source_value(source, "supplementary-information"),
+                "charge-address": source_value(source, "charge-address"),
+                "charge-geographic-description": source_value(source, "charge-geographic-description"),
+                "amazons3_path": amazon_path,
+                "amazons3_path_cfd": (
+                    (mapping.get("amazons3_confidence") or "0.00").strip() if route == "s3" else "0.00"
+                ),
+                "amazons3_path_mappingrule": (audit.get("rule_id") or "").strip() if route == "s3" else "",
+                "amazons3_path_note": reason if route == "s3" else "",
+                "portal_path": portal_path,
+                "portal_path_cfd": (
+                    (audit.get("decision_confidence") or "0.00").strip() if route == "portal" else "0.00"
+                ),
+                "portal_path_mappingrule": (audit.get("rule_id") or "").strip() if route == "portal" else "",
+                "portal_path_note": reason if route == "portal" else "",
+                "path_source": source_type,
+                "path_found": status,
             }
-        )
+        mapping_total_rows.append(row)
+        mappingj_rows.append({field: row[field] for field in MAPPINGJ_FIELDS})
 
-    ids = [row["originating-authority-charge-identifier"] for row in full_rows]
+    ids = [row["originating-authority-charge-identifier"] for row in mapping_total_rows]
     if any(not oid for oid in ids) or len(ids) != len(set(ids)):
         raise MappingServiceError("Output contains blank or duplicate case identifiers")
 
     output_directory.mkdir(parents=True, exist_ok=False)
     prefix = f"{council}-{slug(batch, label='batch')}"
-    primary_path = output_directory / f"{prefix}-mapping.csv"
-    full_path = output_directory / f"{prefix}-workflow-results.csv"
+    mapping_total_path = output_directory / f"{prefix}-mapping.csv"
+    mappingj_path = output_directory / f"{prefix}-mappingj.csv"
     exported_audit_path = output_directory / f"{prefix}-mapping-audit.csv"
     exported_spec_path = output_directory / "routing-spec.json"
     report_path = output_directory / "mapping-run-report.json"
-    write_csv(primary_path, full_rows, PRIMARY_FIELDS)
-    write_csv(full_path, full_rows, WORKFLOW_FIELDS)
+    write_csv(mapping_total_path, mapping_total_rows, MAPPING_TOTAL_FIELDS)
+    write_csv(mappingj_path, mappingj_rows, MAPPINGJ_FIELDS)
     shutil.copy2(audit_path, exported_audit_path)
     shutil.copy2(spec_path, exported_spec_path)
     validation = json.loads(validation_path.read_text(encoding="utf-8"))
-    counts = Counter(row["match_status"] for row in full_rows)
-    source_counts = Counter(row["source_type"] or "none" for row in full_rows)
+    counts = Counter(row["path_found"] for row in mapping_total_rows)
+    source_counts = Counter(row["path_source"] or "none" for row in mapping_total_rows)
     report = {
         "status": "completed_staged",
         "production_published": False,
         "council": council,
         "batch": batch,
-        "case_count": len(full_rows),
+        "case_count": len(mapping_total_rows),
         "match_status_counts": {key: counts.get(key, 0) for key in ("found", "no_found", "no_match")},
         "source_type_counts": dict(sorted(source_counts.items())),
         "coverage": {
@@ -248,8 +281,8 @@ def export_outputs(*, workspace: Path, council: str, batch: str, output_director
         },
         "validation": validation,
         "outputs": {
-            "primary_mapping": str(primary_path),
-            "full_mapping": str(full_path),
+            "mapping_total": str(mapping_total_path),
+            "mappingj": str(mappingj_path),
             "audit": str(exported_audit_path),
             "routing_spec": str(exported_spec_path),
             "run_report": str(report_path),

@@ -39,7 +39,7 @@ class N8nMappingServiceTests(unittest.TestCase):
             ],
         )
 
-    def test_export_outputs_emits_primary_full_and_audit_with_complete_coverage(self) -> None:
+    def test_export_outputs_emits_mapping_total_and_mappingj_with_complete_coverage(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             workspace = root / "workspace"
@@ -70,6 +70,7 @@ class N8nMappingServiceTests(unittest.TestCase):
                 "match_basis",
                 "match_status",
                 "rejection_reason",
+                "decision_confidence",
             )
             write_rows(
                 workspace / "mapping" / "mapping-audit.csv",
@@ -83,6 +84,7 @@ class N8nMappingServiceTests(unittest.TestCase):
                         "match_basis": "reference",
                         "match_status": "accepted_unique_rule_supported",
                         "rejection_reason": "",
+                        "decision_confidence": "0.74",
                     },
                     {
                         "oachargeid": "case-2",
@@ -92,11 +94,40 @@ class N8nMappingServiceTests(unittest.TestCase):
                         "match_basis": "reference",
                         "match_status": "not_found",
                         "rejection_reason": "No candidate",
+                        "decision_confidence": "0.00",
+                    },
+                ],
+            )
+            write_rows(
+                workspace / "prepared" / "source-records.csv",
+                (
+                    "oachargeid",
+                    "further-information-reference",
+                    "supplementary-information",
+                    "charge-address",
+                    "charge-geographic-description",
+                ),
+                [
+                    {
+                        "oachargeid": "case-1",
+                        "further-information-reference": "FIR-1",
+                        "supplementary-information": "Supplement 1",
+                        "charge-address": "1 Example Street",
+                        "charge-geographic-description": "Example Ward",
+                    },
+                    {
+                        "oachargeid": "case-2",
+                        "further-information-reference": "FIR-2",
+                        "supplementary-information": "Supplement 2",
+                        "charge-address": "2 Example Street",
+                        "charge-geographic-description": "Example Ward",
                     },
                 ],
             )
             (workspace / "spec").mkdir(parents=True)
-            (workspace / "spec" / "mapping-spec.json").write_text("{}\n", encoding="utf-8")
+            (workspace / "spec" / "mapping-spec.json").write_text(
+                json.dumps({"source_id_field": "oachargeid"}), encoding="utf-8"
+            )
             (workspace / "validation").mkdir(parents=True)
             (workspace / "validation" / "validation.json").write_text(
                 json.dumps({"gates": {"row_counts_equal": True}}), encoding="utf-8"
@@ -109,12 +140,19 @@ class N8nMappingServiceTests(unittest.TestCase):
                 output_directory=output,
             )
 
-            full_path = Path(report["outputs"]["full_mapping"])
-            with full_path.open(encoding="utf-8", newline="") as handle:
+            mapping_total_path = Path(report["outputs"]["mapping_total"])
+            with mapping_total_path.open(encoding="utf-8", newline="") as handle:
                 reader = csv.DictReader(handle)
                 rows = list(reader)
-                self.assertEqual(tuple(reader.fieldnames or ()), MODULE.WORKFLOW_FIELDS)
-            self.assertEqual([row["match_status"] for row in rows], ["found", "no_found"])
+                self.assertEqual(tuple(reader.fieldnames or ()), MODULE.MAPPING_TOTAL_FIELDS)
+            self.assertEqual([row["path_found"] for row in rows], ["found", "no_found"])
+            self.assertEqual(rows[0]["further-information-reference"], "FIR-1")
+            self.assertEqual(rows[0]["amazons3_path_cfd"], "0.74")
+            self.assertEqual(rows[1]["portal_path_mappingrule"], "")
+            mappingj_path = Path(report["outputs"]["mappingj"])
+            with mappingj_path.open(encoding="utf-8", newline="") as handle:
+                reader = csv.DictReader(handle)
+                self.assertEqual(tuple(reader.fieldnames or ()), MODULE.MAPPINGJ_FIELDS)
             self.assertEqual(report["coverage"]["exact"], True)
             self.assertEqual(report["match_status_counts"], {"found": 1, "no_found": 1, "no_match": 0})
 
