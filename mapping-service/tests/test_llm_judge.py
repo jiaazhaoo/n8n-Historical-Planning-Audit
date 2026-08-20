@@ -197,8 +197,22 @@ class LlmJudgeVerifierTests(unittest.TestCase):
         self.assertIn("states no address or description", reason)
         self.assertEqual(budget.calls, 0)
 
+    def test_a_match_survives_the_reviewer_calling_the_scan_poor(self) -> None:
+        # Real case: the reviewer matched "Flats 1-7 Watergate" through the OCR
+        # spelling "FLAT NOS I- 7C WATERAATE" and set readable false anyway.
+        transport = ScriptedTransport(
+            judgement(readable=False, matched_address=True, document_site="FLAT NOS I- 7C WATERAATE")
+        )
+        verifier = self._verifier(FILLER + "\nFLAT NOS I- 7C WATERAATE", transport)
+        exp = expectation("A", address="Flats 1-7 Watergate Exeter EX2")
+        verifier.prepare([exp])
+        verdict, _, _, _, _, _, _ = self._verify(verifier, exp)
+        self.assertEqual(verdict, QaVerdict.VERIFIED_SAME)
+
     def test_the_model_reporting_illegible_text_is_unreadable(self) -> None:
-        transport = ScriptedTransport(judgement(readable=False, matched_address=False))
+        transport = ScriptedTransport(judgement(readable=False, matched_address=False,
+                                                belongs=False, matched_description=False,
+                                                document_site=""))
         verifier = self._verifier(FILLER + "\nSMUDGE", transport)
         exp = expectation("A", address=HERON)
         verifier.prepare([exp])

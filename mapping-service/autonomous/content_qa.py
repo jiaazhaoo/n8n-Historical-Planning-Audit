@@ -431,6 +431,13 @@ def _neutral_image(
     max_dimension: int,
     max_pixels: int,
 ) -> Path:
+    # A neutral image is a deterministic function of its source and the size
+    # limits, and re-deriving one costs a 50 MP decode plus a LANCZOS resize.
+    # Within a round's artifact store those inputs do not change, so an existing
+    # rendering is the same rendering.
+    existing = artifacts.resolve(relative)
+    if existing.is_file() and existing.stat().st_size > 0:
+        return existing
     with Image.open(source) as opened:
         if opened.width * opened.height > max_pixels:
             raise ContentQaError(f"Image exceeds the {max_pixels}-pixel safety limit: {source}")

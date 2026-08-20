@@ -189,13 +189,7 @@ class LlmJudgeVerifier:
             swapped = self._swapped_with(expectation, str(judgement.get("document_site") or ""))
             evidence = str(judgement.get("evidence") or "").strip()[:200]
 
-            if not judgement.get("readable", True):
-                verdict, confidence, reason = (
-                    QaVerdict.UNREADABLE,
-                    0.0,
-                    "The reviewer found too little legible record content to judge",
-                )
-            elif judgement.get("matched_address"):
+            if judgement.get("matched_address"):
                 verdict, confidence, reason = (
                     QaVerdict.VERIFIED_SAME,
                     0.90,
@@ -213,6 +207,17 @@ class LlmJudgeVerifier:
                     QaVerdict.VERIFIED_SAME,
                     0.90,
                     f"The file's proposal matches the source record: {evidence}",
+                )
+            elif not judgement.get("readable", True):
+                # Checked only after the positive outcomes. A reviewer can call
+                # a scan poor while still reading the site off it -- one file
+                # matched "Flats 1-7 Watergate" through the OCR spelling
+                # "FLAT NOS I- 7C WATERAATE" and set readable false anyway.
+                # Testing readability first threw that match away.
+                verdict, confidence, reason = (
+                    QaVerdict.UNREADABLE,
+                    0.0,
+                    "The reviewer found too little legible record content to judge",
                 )
             else:
                 verdict, confidence, reason = (
