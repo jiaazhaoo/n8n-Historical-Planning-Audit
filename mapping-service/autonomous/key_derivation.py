@@ -79,10 +79,20 @@ def normalise(value: str, normalizers: Sequence[str], *, year_pivot: int = 30) -
         elif name == "trim":
             result = result.strip()
         elif name == "year2to4":
-            if not result.isdigit() or len(result) != 2:
-                raise DerivationError(f"year2to4 needs a two-digit value, got {result!r}")
-            century = 19 if int(result) >= year_pivot else 20
-            result = f"{century}{result}"
+            # Idempotent by design. The same part name carries one set of
+            # normalisers on both sides of a join, and a reference writes a
+            # two-digit year where its folder writes four; refusing the
+            # four-digit form would make one side unkeyable and the join silently
+            # empty.
+            if result.isdigit() and len(result) == 4:
+                pass
+            elif result.isdigit() and len(result) == 2:
+                century = 19 if int(result) >= year_pivot else 20
+                result = f"{century}{result}"
+            else:
+                raise DerivationError(
+                    f"year2to4 needs a two- or four-digit year, got {result!r}"
+                )
         elif match := PAD.match(name):
             result = result.rjust(int(match.group(1)), "0")
         else:

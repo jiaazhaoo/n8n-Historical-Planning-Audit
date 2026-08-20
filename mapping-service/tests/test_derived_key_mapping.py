@@ -203,10 +203,10 @@ class NormalizerVocabularyTests(unittest.TestCase):
 
 
 class KeyFailureExplanationTests(unittest.TestCase):
-    def test_a_part_name_holding_two_formats_is_named_as_the_cause(self) -> None:
-        # A compiler wrote {year} for the reference's two-digit year and for the
-        # folder's four-digit year, then normalised "year" with year2to4. The
-        # source side worked and the inventory side silently produced no key.
+    def test_one_year_part_spans_a_two_digit_and_a_four_digit_side(self) -> None:
+        # The natural way to write this join names both sides "year", because a
+        # reference says 88 where its folder says 1988. year2to4 is idempotent
+        # so that spelling is correct rather than a silent empty join.
         key = DerivedKey(
             source_templates=("{year:d}/{number:d}/{type:a}",),
             inventory_templates=("EXE_{year:d}_{shortyear:d}-{number:d}-{suffix}",),
@@ -219,10 +219,17 @@ class KeyFailureExplanationTests(unittest.TestCase):
             part_defaults=({"part": "shortyear", "value": ""}, {"part": "suffix", "value": ""}),
         ).build()
         self.assertEqual(key.source_key("88/1061/FUL"), ("1988", "1061"))
-        self.assertIsNone(key.inventory_key("EXE_1988_88-1061-02"))
-        explanation = key.explain("EXE_1988_88-1061-02", side="inventory")
-        self.assertIn("year='1988'", explanation)
-        self.assertIn("same format on each", explanation)
+        self.assertEqual(key.inventory_key("EXE_1988_88-1061-02"), ("1988", "1061"))
+
+    def test_a_year_that_is_neither_two_nor_four_digits_is_still_refused(self) -> None:
+        key = DerivedKey(
+            source_templates=("{year:d}/{number:d}",),
+            inventory_templates=("EXE_{year:d}-{number:d}",),
+            key_parts=("year", "number"),
+            part_normalizers=({"part": "year", "normalizers": ("year2to4",)},),
+        ).build()
+        self.assertIsNone(key.source_key("198/1061"))
+        self.assertIn("two- or four-digit", key.explain("198/1061", side="source"))
 
     def test_a_value_no_template_matches_is_named_as_such(self) -> None:
         explanation = EXETER_KEY.build().explain("TPO 5/2011", side="source")

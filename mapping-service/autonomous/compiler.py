@@ -133,9 +133,9 @@ Non-negotiable rules:
   88/1061/FUL and its folder EXE_1988_88-1061-02 share a year and a number, but FUL is an application
   type while 02 is a document type: key_parts must be the year and number only. A part that means two
   different things joins nothing, and the spec will be rejected for joining nothing.
-- A part name carries one set of normalizers on both sides, so the same name must hold the same format
-  on each side. If the reference writes a two-digit year and the folder writes four, do not call both
-  "year": name them separately and normalize the two-digit one with year2to4 so the two agree.
+- A part name carries one set of normalizers on both sides. year2to4 accepts a two- or four-digit year
+  and returns four, so naming both sides "year" and normalizing it with year2to4 is correct when the
+  reference writes two digits and the folder writes four.
 - Conditions are ANDed. Use an always predicate only for a genuine catch-all route.
 - For an always predicate set field to the empty string and value to null. For is_blank and not_blank,
   set value to null.
