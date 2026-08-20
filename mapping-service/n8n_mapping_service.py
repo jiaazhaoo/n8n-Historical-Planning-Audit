@@ -352,6 +352,75 @@ def copy_artifact(path: Path, staging: Path, index: int) -> str:
     return destination.name
 
 
+INVENTORY_SOURCES_NAME = "inventory-sources.json"
+INVENTORY_NAME_SUFFIX = "-s3-index.csv"
+
+
+def _s3_lister(bucket: str, prefix: str):
+    import boto3
+    from key_manager import get_aws_client_kwargs
+
+    client = boto3.client("s3", **get_aws_client_kwargs())
+    paginator = client.get_paginator("list_objects_v2")
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+        yield from page.get("Contents", [])
+
+
+def ensure_inventory(council: str, *, rebuild: bool = False) -> tuple[Path | None, dict[str, Any]]:
+    """Return the council's scan inventory, building it once if it is absent.
+
+    The inventory does not vary by batch and listing one can take minutes, so it
+    is built on first use and reused after. Which trees to list, and whether a
+    record is a folder or a file, are declared per council rather than asked for
+    on every run: getting them wrong is silent, and a run should not be able to
+    get them wrong differently each time.
+    """
+    from autonomous.inventory import (
+        InventoryError,
+        build_rows,
+        load_sources,
+        missing_trees,
+        summarise,
+        write_inventory,
+    )
+
+    root = DATA_ROOT / council / "file-matching"
+    declaration = root / INVENTORY_SOURCES_NAME
+    inventory = root / f"{council}{INVENTORY_NAME_SUFFIX}"
+    if not declaration.is_file():
+        return None, {"declared": False, "reason": f"no {declaration}"}
+    if inventory.is_file() and not rebuild:
+        return inventory, {"declared": True, "built": False, "path": str(inventory)}
+
+    try:
+        sources = load_sources(declaration)
+        rows = build_rows(sources, lister=_s3_lister)
+    except InventoryError as exc:
+        raise MappingServiceError(str(exc)) from exc
+
+    summary = summarise(rows, sources)
+    delivered_csv = PROTECTED_ROOT / council / f"{council}-matching.csv"
+    if delivered_csv.is_file():
+        # A tree the delivered mapping points into but no source lists is a
+        # missing tree, and it is far cheaper to say so here than to infer it
+        # later from an unexplained join rate.
+        delivered = [row.get("amazons3_path", "") for row in read_csv(delivered_csv)]
+        missing = missing_trees(sources, delivered)
+        summary["missing_trees"] = missing
+        if missing:
+            raise MappingServiceError(
+                "The declared inventory sources do not cover trees the delivered mapping uses: "
+                f"{missing}. Add them to {declaration} before mapping."
+            )
+
+    write_inventory(rows, inventory)
+    (root / f"{council}-s3-index-summary.json").write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    summary.update({"declared": True, "built": True, "path": str(inventory)})
+    return inventory, summary
+
+
 def run_mapping(payload: dict[str, Any]) -> dict[str, Any]:
     council = slug(str(payload.get("council") or ""), label="council")
     batch = str(payload.get("batch") or "").strip()
@@ -373,12 +442,23 @@ def run_mapping(payload: dict[str, Any]) -> dict[str, Any]:
 
     s3_paths = [safe_data_path(value) for value in list_value(payload.get("s3_inventory_paths"))]
     portal_paths = [safe_data_path(value) for value in list_value(payload.get("portal_evidence_paths"))]
+    inventory_summary: dict[str, Any] = {"declared": False}
     if not s3_paths and not portal_paths:
         conventional = DATA_ROOT / council / "file-matching" / f"{council}-s3-folder-index.csv"
         if conventional.is_file():
             s3_paths = [safe_data_path(str(conventional))]
     if not s3_paths and not portal_paths:
-        raise MappingServiceError("At least one S3 inventory or Portal evidence path is required")
+        built, inventory_summary = ensure_inventory(
+            council, rebuild=bool(payload.get("rebuild_inventory", False))
+        )
+        if built is not None:
+            s3_paths = [safe_data_path(str(built))]
+    if not s3_paths and not portal_paths:
+        raise MappingServiceError(
+            "No S3 inventory or Portal evidence was supplied, and this council declares no "
+            f"inventory sources. Create {DATA_ROOT / council / 'file-matching' / INVENTORY_SOURCES_NAME} "
+            "or pass s3_inventory_paths."
+        )
 
     stamp = utc_stamp()
     submission = JOBS_ROOT / "submissions" / f"{council}-{slug(batch, label='batch')}-{stamp}"
@@ -489,6 +569,7 @@ def run_mapping(payload: dict[str, Any]) -> dict[str, Any]:
     report["selected_portal_evidence"] = [str(path) for path in portal_paths]
     report["approved_spec"] = str(approved_spec) if approved_spec else None
     report["spec_source"] = "approved" if approved_spec else "compiled"
+    report["inventory"] = inventory_summary
     # export_outputs wrote the report before these run-level fields existed. The
     # quality loop reads the report from disk to find the audit and source it
     # must review, so the file has to carry what the response carries.
