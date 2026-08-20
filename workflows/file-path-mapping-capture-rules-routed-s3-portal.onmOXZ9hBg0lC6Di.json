@@ -1,6 +1,17 @@
 {
   "active": true,
   "connections": {
+    "Acceptance review on holdout": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Publication decision",
+            "type": "main"
+          }
+        ]
+      ]
+    },
     "Compile rules and map every case": {
       "main": [
         [
@@ -12,12 +23,52 @@
         ]
       ]
     },
+    "Gate cleared?": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Acceptance review on holdout",
+            "type": "main"
+          }
+        ],
+        [
+          {
+            "index": 0,
+            "node": "Defect diagnosis",
+            "type": "main"
+          }
+        ]
+      ]
+    },
     "Mapping job input": {
       "main": [
         [
           {
             "index": 0,
             "node": "Validate mapping request",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Mapping outputs": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Quality round on working pool",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Quality round on working pool": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Gate cleared?",
             "type": "main"
           }
         ]
@@ -92,6 +143,16 @@
               "fieldName": "portal_evidence_paths",
               "fieldType": "textarea",
               "placeholder": "/data/.../portal-evidence.csv"
+            },
+            {
+              "fieldLabel": "Quality sample size per round (default 12)",
+              "fieldName": "sample_size",
+              "placeholder": "12"
+            },
+            {
+              "fieldLabel": "Review budget in USD per round (default 3.00)",
+              "fieldName": "budget_usd",
+              "placeholder": "3.00"
             }
           ]
         },
@@ -146,11 +207,112 @@
       "id": "mapping-summary",
       "name": "Mapping outputs",
       "parameters": {
-        "jsCode": "const result = $json;\nif (!result.coverage?.exact) throw new Error('Mapping completed without exact source/mapping/audit coverage.');\nreturn [{json:{status:result.status,production_published:false,job_id:result.job_id,council:result.council,batch:result.batch,case_count:result.case_count,match_status_counts:result.match_status_counts,source_type_counts:result.source_type_counts,selected_capture_rules:result.selected_capture_rules,selected_s3_inventory:result.selected_s3_inventory,selected_portal_evidence:result.selected_portal_evidence,outputs:result.outputs}}];"
+        "jsCode": "const result = $json;\nif (!result.coverage?.exact) throw new Error('Mapping completed without exact source/mapping/audit coverage.');\nconst form = $('Mapping job input').first().json;\nconst runReport = result.outputs?.run_report;\nif (!runReport) throw new Error('Mapping run did not report an output directory.');\nconst runDirectory = runReport.replace(/\\/[^/]+$/, '');\nconst positive = (value, fallback) => {\n  const parsed = Number(String(value ?? '').trim());\n  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;\n};\nreturn [{json:{\n  status: result.status,\n  production_published: false,\n  job_id: result.job_id,\n  council: result.council,\n  batch: result.batch,\n  case_count: result.case_count,\n  match_status_counts: result.match_status_counts,\n  source_type_counts: result.source_type_counts,\n  selected_capture_rules: result.selected_capture_rules,\n  selected_s3_inventory: result.selected_s3_inventory,\n  selected_portal_evidence: result.selected_portal_evidence,\n  outputs: result.outputs,\n  run_directory: runDirectory,\n  // Everything the quality endpoint needs, assembled once so the working round\n  // and the acceptance round cannot drift apart.\n  quality_request: {\n    council: result.council,\n    batch: result.batch,\n    run_directory: runDirectory,\n    stage: 'working',\n    sample_size: positive(form.sample_size, 12),\n    budget_usd: positive(form.budget_usd, 3.0),\n  },\n}}];"
       },
       "position": [
         260,
         0
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "quality-round-on-working-pool",
+      "name": "Quality round on working pool",
+      "parameters": {
+        "body": "={{ JSON.stringify($json.quality_request) }}",
+        "contentType": "raw",
+        "method": "POST",
+        "options": {
+          "timeout": 3600000
+        },
+        "rawContentType": "application/json",
+        "sendBody": true,
+        "url": "http://host.docker.internal:5680/quality"
+      },
+      "position": [
+        540,
+        0
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "gate-decision",
+      "name": "Gate cleared?",
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "gate-passed",
+              "leftValue": "={{ $json.next.action }}",
+              "operator": {
+                "operation": "equals",
+                "type": "string"
+              },
+              "rightValue": "accept"
+            }
+          ],
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          }
+        },
+        "options": {}
+      },
+      "position": [
+        820,
+        0
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2
+    },
+    {
+      "id": "acceptance-review-on-holdout",
+      "name": "Acceptance review on holdout",
+      "parameters": {
+        "body": "={{ JSON.stringify({ ...$('Mapping outputs').first().json.quality_request, stage: 'acceptance' }) }}",
+        "contentType": "raw",
+        "method": "POST",
+        "options": {
+          "timeout": 3600000
+        },
+        "rawContentType": "application/json",
+        "sendBody": true,
+        "url": "http://host.docker.internal:5680/quality"
+      },
+      "position": [
+        1100,
+        -160
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "publish-decision",
+      "name": "Publication decision",
+      "parameters": {
+        "jsCode": "const acceptance = $json;\nconst mapping = $('Mapping outputs').first().json;\nconst passed = acceptance.passed === true;\n// The holdout is the only sample the spec was never tuned against, so it is the\n// only one that may authorise publication.\nreturn [{json:{\n  status: passed ? 'accepted_on_holdout' : 'holdout_gate_failed',\n  production_published: false,\n  cleared_for_publication: passed,\n  council: mapping.council,\n  batch: mapping.batch,\n  case_count: mapping.case_count,\n  outputs: mapping.outputs,\n  acceptance_metrics: acceptance.metrics,\n  acceptance_reasons: acceptance.reasons || [],\n  sampling_plan: acceptance.sampling_plan,\n  budget: acceptance.budget,\n  model: acceptance.model,\n  quality_report: acceptance.quality_report,\n}}];"
+      },
+      "position": [
+        1380,
+        -160
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "defect-diagnosis",
+      "name": "Defect diagnosis",
+      "parameters": {
+        "jsCode": "const review = $json;\nconst next = review.next || {};\n// A failing round is a result, not an error: the focus list is what the spec\n// change has to answer, and the report is the evidence for it.\nreturn [{json:{\n  status: 'quality_gate_failed',\n  production_published: false,\n  action: next.action,\n  detail: next.detail,\n  focus: next.focus || [],\n  reasons: review.reasons || [],\n  metrics: review.metrics,\n  budget: review.budget,\n  model: review.model,\n  round_index: review.round_index,\n  sampled_ids: review.sampled_ids,\n  quality_report: review.quality_report,\n  guidance: 'Adjust the mapping spec against the focus list, rerun this workflow, and the next round will sample cases it has not seen.',\n}}];"
+      },
+      "position": [
+        1100,
+        160
       ],
       "type": "n8n-nodes-base.code",
       "typeVersion": 2
