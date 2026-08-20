@@ -19,12 +19,14 @@ from .key_derivation import KeyDerivation, index_inventory
 
 @dataclass(frozen=True)
 class Precedence:
-    """Order competing candidates by where they live.
+    """Order competing candidates by a field that ranks them.
 
-    Test Valley holds the same reference as both microfiche and paper, in the
-    same region. Those are not ambiguous candidates to be rejected; the capture
-    rules say which medium wins. Anything the order cannot separate stays
-    genuinely ambiguous.
+    Competing candidates are usually not ambiguous, they are graded. Test Valley
+    holds the same reference as both microfiche and paper and the capture rules
+    make fiche primary; Braintree's portal evidence holds both verified official
+    documents and unverified search hits for one reference. Same primitive, a
+    different field each time. Whatever the order cannot separate stays
+    genuinely ambiguous and is still rejected.
     """
 
     field_name: str = "parent_prefix"
