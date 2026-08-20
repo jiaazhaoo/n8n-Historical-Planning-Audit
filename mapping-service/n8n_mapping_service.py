@@ -695,6 +695,53 @@ def run_quality(payload: dict[str, Any]) -> dict[str, Any]:
     return response
 
 
+def run_publish(payload: dict[str, Any]) -> dict[str, Any]:
+    """Promote one verified run into the runtime table it serves from.
+
+    This is the only path that writes below /data/file-browser-data. Every other
+    entry point refuses that tree outright, and this one opens only on the run's
+    own acceptance evidence.
+    """
+    from autonomous.publication import PublicationError, publish_mapping
+
+    council = slug(str(payload.get("council") or ""), label="council")
+    batch = str(payload.get("batch") or "").strip()
+    if not batch:
+        raise MappingServiceError("batch is required")
+    run_directory = safe_data_path(str(payload.get("run_directory") or ""), kind="directory")
+    report = load_run_report(run_directory)
+    if report.get("council") != council or report.get("batch") != batch:
+        raise MappingServiceError(
+            f"Run directory belongs to {report.get('council')}/{report.get('batch')}, "
+            f"not {council}/{batch}"
+        )
+
+    mapping_csv = safe_data_path(str((report.get("outputs") or {}).get("mapping_total") or ""))
+    # Deliberately not routed through safe_data_path: that helper exists to keep
+    # every other operation out of this tree.
+    runtime_csv = PROTECTED_ROOT / council / f"{council}-matching.csv"
+    if not runtime_csv.is_file():
+        raise MappingServiceError(f"Runtime table does not exist: {runtime_csv}")
+
+    try:
+        result = publish_mapping(
+            council=council,
+            batch=batch,
+            mapping_csv=mapping_csv,
+            runtime_csv=runtime_csv,
+            run_directory=run_directory,
+            dry_run=bool(payload.get("dry_run", False)),
+        )
+    except PublicationError as exc:
+        raise MappingServiceError(str(exc)) from exc
+
+    described = result.describe()
+    described["dry_run"] = bool(payload.get("dry_run", False))
+    if described["dry_run"]:
+        described["production_published"] = False
+    return described
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "n8n-file-path-mapping/1.0"
 
@@ -726,7 +773,7 @@ class Handler(BaseHTTPRequestHandler):
         if not self.client_allowed():
             self.respond(HTTPStatus.FORBIDDEN, {"error": "forbidden_client"})
             return
-        handlers = {"/run": run_mapping, "/quality": run_quality}
+        handlers = {"/run": run_mapping, "/quality": run_quality, "/publish": run_publish}
         handler = handlers.get(self.path)
         if handler is None:
             self.respond(HTTPStatus.NOT_FOUND, {"error": "not_found"})
