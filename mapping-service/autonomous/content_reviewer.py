@@ -17,12 +17,14 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from .acquisition import AcquisitionLimits, BoundedAcquirer, RegisteredPortalAdapter
-from .content_qa import (
-    CodexOAuthVisionExtractor,
-    ContentQaConfig,
-    IdentityFieldProfile,
-    run_content_qa,
+from .content_qa import ContentQaConfig, IdentityFieldProfile, run_content_qa
+from .openrouter_vision import (
+    DEFAULT_MODEL,
+    OpenRouterSettings,
+    OpenRouterVisionExtractor,
+    read_api_key,
 )
+from .review_budget import DEFAULT_ESTIMATE_USD_PER_CASE, DEFAULT_LIMIT_USD, ReviewBudget
 from .storage import ArtifactStore
 
 
@@ -50,12 +52,18 @@ class ReviewerSettings:
     max_file_bytes: int = 128 * 1024 * 1024
     max_case_bytes: int = 512 * 1024 * 1024
     max_total_bytes: int = 512 * 1024 * 1024
+    openrouter_key_path: Path = Path("/env/key/spatial_capture.keys.md")
+    model: str = DEFAULT_MODEL
+    budget_usd: float = DEFAULT_LIMIT_USD
+    estimate_usd_per_case: float = DEFAULT_ESTIMATE_USD_PER_CASE
 
     def validate(self) -> None:
         if not self.acquire and self.documents_root is None:
             raise ContentReviewError(
                 "documents_root is required when automatic acquisition is disabled"
             )
+        if self.budget_usd <= 0:
+            raise ContentReviewError("budget_usd must be positive")
 
 
 class ContentQaReviewer:
@@ -76,6 +84,23 @@ class ContentQaReviewer:
         if not include_ids:
             raise ContentReviewError("A review needs at least one case identifier")
         settings = self.settings
+        budget = ReviewBudget(
+            limit_usd=settings.budget_usd,
+            estimate_usd_per_case=settings.estimate_usd_per_case,
+        )
+
+        # Trim the sample before any document is fetched. Discovering the
+        # ceiling mid-round would leave a partly reviewed sample whose pass rate
+        # describes whichever cases happened to be cheap.
+        affordable = budget.affordable_cases()
+        if affordable < 1:
+            raise ContentReviewError(
+                f"A budget of ${settings.budget_usd:.2f} does not cover one case at an "
+                f"estimated ${settings.estimate_usd_per_case:.4f} per case"
+            )
+        if len(include_ids) > affordable:
+            budget.note_truncation(len(include_ids) - affordable)
+            include_ids = tuple(include_ids)[:affordable]
         config = ContentQaConfig(
             council=settings.council,
             batch=settings.batch,
@@ -118,11 +143,18 @@ class ContentQaReviewer:
             else None
         )
 
+        extractor = OpenRouterVisionExtractor(
+            OpenRouterSettings(
+                api_key=read_api_key(settings.openrouter_key_path),
+                model=settings.model,
+            ),
+            budget=budget,
+        )
         report = run_content_qa(
             run_id=run_id,
             config=config,
             artifacts=artifacts,
-            extractor=CodexOAuthVisionExtractor(repository_root=self.repository_root),
+            extractor=extractor,
             acquirer=acquirer,
         )
         case_results = json.loads(
@@ -134,4 +166,11 @@ class ContentQaReviewer:
             raise ContentReviewError(
                 f"Content QA did not return results for requested cases: {missing}"
             )
-        return report.model_dump(mode="json"), case_results
+        summary = report.model_dump(mode="json")
+        summary["budget"] = budget.describe()
+        summary["model"] = settings.model
+        artifacts.write_mutable(
+            "qa/review-budget.json",
+            json.dumps(summary["budget"], ensure_ascii=False, indent=2).encode("utf-8"),
+        )
+        return summary, case_results

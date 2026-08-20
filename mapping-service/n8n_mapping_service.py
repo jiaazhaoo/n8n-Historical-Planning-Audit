@@ -483,6 +483,11 @@ def run_mapping(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 QUALITY_LOOP_DIRNAME = "quality-loop"
+# Each sampling round is priced independently, so a loop that needs three rounds
+# costs three budgets rather than dividing one.
+DEFAULT_QA_MODEL = "google/gemini-3.7-flash"
+DEFAULT_QA_BUDGET_USD = 3.0
+DEFAULT_QA_ESTIMATE_USD = 0.01
 QUALITY_REPORT_DIRNAME = "quality-report"
 
 
@@ -567,6 +572,11 @@ def run_quality(payload: dict[str, Any]) -> dict[str, Any]:
         documents_root=documents_root,
         acquire=acquire,
         max_images_per_case=int(payload.get("max_images", 12)),
+        model=str(payload.get("model") or "").strip() or DEFAULT_QA_MODEL,
+        budget_usd=float(payload.get("budget_usd", DEFAULT_QA_BUDGET_USD)),
+        estimate_usd_per_case=float(
+            payload.get("estimate_usd_per_case", DEFAULT_QA_ESTIMATE_USD)
+        ),
         field_profile=IdentityFieldProfile(
             reference_fields=tuple(list_value(payload.get("reference_field"))),
             address_fields=tuple(list_value(payload.get("address_field"))),
@@ -612,6 +622,8 @@ def run_quality(payload: dict[str, Any]) -> dict[str, Any]:
         "production_published": False,
         "state_path": str(state_path),
         "sampling_plan": state.plan().describe(),
+        "budget": result.record.verification_report.get("budget"),
+        "model": result.record.verification_report.get("model"),
         **result.describe(),
         "next": next_action(result),
     }
