@@ -197,6 +197,27 @@ class KeyDerivation:
     def inventory_key(self, value: str) -> tuple[str, ...] | None:
         return self._key(self._first_parse(self.inventory_templates, value))
 
+    def inventory_value_for(self, source_value: str) -> str | None:
+        """Render the inventory-side text a source value should match.
+
+        Because a template both parses and formats, a spec can manufacture the
+        folder name a reference ought to have. The verifier uses this to build
+        synthetic candidates and prove a rule rejects ambiguity, without needing
+        a second, hand-written pattern that could disagree with the first.
+        """
+        parts = self._first_parse(self.source_templates, source_value)
+        if parts is None:
+            return None
+        template = self.inventory_templates[0]
+        filled = dict(self.defaults)
+        filled.update(parts)
+        for name in template.part_names:
+            filled.setdefault(name, "0")
+        try:
+            return template.format(filled)
+        except DerivationError:
+            return None
+
     def describe(self) -> dict[str, Any]:
         return {
             "source_templates": [item.pattern for item in self.source_templates],

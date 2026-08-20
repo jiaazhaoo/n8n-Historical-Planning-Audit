@@ -1,0 +1,238 @@
+from __future__ import annotations
+
+from .engine import MappingEngineError, execute_mapping, read_csv, route_for
+from .schemas import (
+    MappingSpec,
+    PredicateOperator,
+    PreparationReport,
+    RouteTarget,
+    SpecVerificationReport,
+)
+
+
+def _condition_value(condition: object) -> str:
+    operator = getattr(condition, "operator")
+    value = getattr(condition, "value")
+    if operator == PredicateOperator.EQUALS:
+        return str(value)
+    if operator == PredicateOperator.IN:
+        return str((value or ("value",))[0])
+    if operator == PredicateOperator.YEAR_BETWEEN:
+        return str((value or ("2000",))[0])
+    if operator == PredicateOperator.NOT_BLANK:
+        return "value"
+    if operator == PredicateOperator.IS_BLANK:
+        return ""
+    if operator == PredicateOperator.NOT_EQUALS:
+        return "__different__"
+    if operator == PredicateOperator.NOT_IN:
+        return "__outside__"
+    return ""
+
+
+def ambiguity_negative_test_errors(spec: MappingSpec, preparation: PreparationReport) -> list[str]:
+    _, source_rows = read_csv(preparation.source_path)
+    errors: list[str] = []
+    if not source_rows:
+        return ["ambiguity negative tests require at least one prepared source row"]
+    for route in spec.routes:
+        if route.target == RouteTarget.REJECT:
+            continue
+        existing = next((row for row in source_rows if route_for(row, spec) == route), None)
+        source = dict(existing or source_rows[0])
+        for condition in route.conditions:
+            if condition.operator == PredicateOperator.ALWAYS:
+                continue
+            # A not_blank condition is already satisfied by whatever the row
+            # holds. Overwriting a real reference with a placeholder makes a
+            # derived key unparsable and turns this test into a false alarm.
+            if condition.operator == PredicateOperator.NOT_BLANK and str(
+                source.get(condition.field) or ""
+            ).strip():
+                continue
+            source[condition.field] = _condition_value(condition)
+        source.setdefault(spec.source_id_field, f"negative-{route.rule_id}")
+        if not str(source.get(spec.source_id_field) or "").strip():
+            source[spec.source_id_field] = f"negative-{route.rule_id}"
+        selected = route_for(source, spec)
+        if selected != route:
+            selected_name = selected.rule_id if selected else "none"
+            errors.append(
+                f"route {route.rule_id}: accepting route is unreachable; synthetic row selects {selected_name}"
+            )
+            continue
+        authoritative_value = str(source.get(route.authoritative_key) or "").strip()
+        if not authoritative_value and route.fallback_key:
+            authoritative_value = str(source.get(route.fallback_key) or "").strip()
+        if not authoritative_value:
+            source[route.authoritative_key] = f"NEGATIVE-{route.rule_id}"
+            authoritative_value = source[route.authoritative_key]
+        inventory_key = route.inventory_key_field or spec.inventory_key_field
+        inventory_path = route.inventory_path_field or spec.inventory_path_field
+        # With a derived key the candidate must look like an inventory entry,
+        # not like the raw reference, or the synthetic pair never collides and
+        # the test would silently prove nothing.
+        candidate_key_value = authoritative_value
+        if route.derived_key is not None:
+            rendered = route.derived_key.build().inventory_value_for(authoritative_value)
+            if rendered is None:
+                errors.append(
+                    f"route {route.rule_id}: derived key cannot render an inventory form for "
+                    f"{authoritative_value!r}, so ambiguity cannot be demonstrated"
+                )
+                continue
+            candidate_key_value = rendered
+        base: dict[str, str] = {inventory_key: candidate_key_value}
+        for condition in route.inventory_conditions:
+            if condition.operator != PredicateOperator.ALWAYS:
+                base[condition.field] = _condition_value(condition)
+        for check in route.secondary_checks:
+            source_value = str(source.get(check.source_field) or "").strip()
+            if not source_value:
+                source_value = "2001-01-01" if check.operator.value == "date_equal" else "negative evidence"
+                source[check.source_field] = source_value
+            base[check.candidate_field] = source_value
+        paths = (
+            ("s3://negative-test/a", "s3://negative-test/b")
+            if route.target == RouteTarget.S3
+            else ("https://negative.invalid/a", "https://negative.invalid/b")
+        )
+        candidates = [{**base, inventory_path: path} for path in paths]
+        try:
+            result = execute_mapping([source], candidates, spec)
+        except (KeyError, MappingEngineError, ValueError) as exc:
+            errors.append(
+                f"route {route.rule_id}: ambiguity negative test could not execute: {type(exc).__name__}: {exc}"
+            )
+            continue
+        mapping = result.mapping_rows[0]
+        audit = result.audit_rows[0]
+        if mapping["amazons3_path"] or mapping["portal_path"]:
+            errors.append(f"route {route.rule_id}: ambiguity negative test accepted a path")
+        if audit["match_status"] != "rejected_ambiguous_multiple_candidates":
+            errors.append(
+                f"route {route.rule_id}: ambiguity negative test returned {audit['match_status']!r}"
+            )
+    return errors
+
+
+def verify_mapping_spec(
+    *,
+    job_id: str,
+    spec: MappingSpec,
+    preparation: PreparationReport,
+) -> SpecVerificationReport:
+    errors: list[str] = []
+    warnings: list[str] = []
+    source_fields = set(preparation.source_fields)
+    inventory_fields = set(preparation.inventory_fields)
+    chunks = {
+        (chunk.artifact_id, chunk.location, chunk.excerpt_sha256): chunk
+        for chunk in preparation.capture_rule_chunks
+    }
+    cited_chunks: set[tuple[str, str, str]] = set()
+    accepting_routes = 0
+
+    if spec.council != preparation.council:
+        errors.append(f"spec council {spec.council!r} does not equal prepared council {preparation.council!r}")
+    if spec.batch != preparation.batch:
+        errors.append(f"spec batch {spec.batch!r} does not equal prepared batch {preparation.batch!r}")
+    if spec.source_id_field not in source_fields:
+        errors.append(f"source_id_field {spec.source_id_field!r} is absent from source evidence")
+    default_key_used = any(
+        route.target != RouteTarget.REJECT and not route.inventory_key_field for route in spec.routes
+    )
+    default_path_used = any(
+        route.target != RouteTarget.REJECT and not route.inventory_path_field for route in spec.routes
+    )
+    if default_key_used and spec.inventory_key_field not in inventory_fields:
+        errors.append(f"default inventory_key_field {spec.inventory_key_field!r} is absent from inventory evidence")
+    if default_path_used and spec.inventory_path_field not in inventory_fields:
+        errors.append(f"default inventory_path_field {spec.inventory_path_field!r} is absent from inventory evidence")
+
+    _, all_source_rows = read_csv(preparation.source_path)
+    source_ids = [str(row.get(spec.source_id_field) or "").strip() for row in all_source_rows]
+    if any(not source_id for source_id in source_ids):
+        errors.append(f"source_id_field {spec.source_id_field!r} contains blank values")
+    if len(source_ids) != len(set(source_ids)):
+        errors.append(f"source_id_field {spec.source_id_field!r} contains duplicate values")
+
+    evidence_roles = {role.value for role in preparation.inventory_roles}
+
+    for route in spec.routes:
+        for condition in route.conditions:
+            if condition.operator != PredicateOperator.ALWAYS and condition.field not in source_fields:
+                errors.append(f"route {route.rule_id}: source condition field {condition.field!r} is absent")
+        if route.target == RouteTarget.REJECT:
+            continue
+        accepting_routes += 1
+        for field, label in (
+            (route.authoritative_key, "authoritative_key"),
+            (route.fallback_key, "fallback_key"),
+        ):
+            if field and field not in source_fields:
+                errors.append(f"route {route.rule_id}: {label} {field!r} is absent from source evidence")
+        effective_key = route.inventory_key_field or spec.inventory_key_field
+        effective_path = route.inventory_path_field or spec.inventory_path_field
+        if effective_key not in inventory_fields:
+            errors.append(f"route {route.rule_id}: inventory key field {effective_key!r} is absent")
+        if effective_path not in inventory_fields:
+            errors.append(f"route {route.rule_id}: inventory path field {effective_path!r} is absent")
+        for condition in route.inventory_conditions:
+            if condition.operator != PredicateOperator.ALWAYS and condition.field not in inventory_fields:
+                errors.append(f"route {route.rule_id}: inventory condition field {condition.field!r} is absent")
+        for check in route.secondary_checks:
+            if check.source_field not in source_fields:
+                errors.append(f"route {route.rule_id}: secondary source field {check.source_field!r} is absent")
+            if check.candidate_field not in inventory_fields:
+                errors.append(f"route {route.rule_id}: secondary inventory field {check.candidate_field!r} is absent")
+        if not route.citations:
+            errors.append(f"route {route.rule_id}: accepting route has no capture-rule citation")
+        for citation in route.citations:
+            key = (citation.artifact_id, citation.location, citation.excerpt_sha256)
+            if key not in chunks:
+                errors.append(
+                    f"route {route.rule_id}: citation {citation.artifact_id}/{citation.location} does not match a frozen chunk"
+                )
+            else:
+                cited_chunks.add(key)
+        if len(evidence_roles) > 1:
+            expected_role = "s3_inventory" if route.target == RouteTarget.S3 else "portal_evidence"
+            role_conditions = [
+                condition
+                for condition in route.inventory_conditions
+                if condition.field == "_evidence_role" and condition.operator == PredicateOperator.EQUALS
+            ]
+            if not any(str(condition.value) == expected_role for condition in role_conditions):
+                errors.append(
+                    f"route {route.rule_id}: mixed inventory requires _evidence_role={expected_role!r}"
+                )
+
+    if accepting_routes == 0:
+        warnings.append("MappingSpec contains only reject routes; this is safe but produces no accepted mappings")
+    negative_errors = ambiguity_negative_test_errors(spec, preparation)
+    errors.extend(negative_errors)
+    gates = {
+        "council_batch_exact": spec.council == preparation.council and spec.batch == preparation.batch,
+        "source_fields_exist": not any("source" in error and "absent" in error for error in errors),
+        "source_ids_nonblank_unique": not any("source_id_field" in error and "values" in error for error in errors),
+        "inventory_fields_exist": not any("inventory" in error and "absent" in error for error in errors),
+        "citations_frozen": not any("citation" in error for error in errors),
+        "accepting_routes_cited": not any("has no capture-rule citation" in error for error in errors),
+        "mixed_routes_separated": not any("mixed inventory requires" in error for error in errors),
+        "ambiguity_negative_tests": not negative_errors,
+        "registry_ready": preparation.registry_ready,
+    }
+    if not preparation.registry_ready:
+        errors.append("Council and batch must be registered before executing the proposed mapping")
+    passed = all(gates.values()) and not errors
+    return SpecVerificationReport(
+        job_id=job_id,
+        spec_id=spec.spec_id,
+        passed=passed,
+        gates=gates,
+        errors=tuple(errors),
+        warnings=tuple(warnings),
+        accepting_routes=accepting_routes,
+        cited_chunks=len(cited_chunks),
+    )

@@ -116,6 +116,16 @@ Non-negotiable rules:
 - Every accepting route must cite one or more capture_rule_chunks. Copy artifact_id, location, and
   excerpt_sha256 exactly from a cited chunk and write a concise statement of what that chunk supports.
 - If the evidence cannot justify an accepting route, emit an explicit reject route instead of guessing.
+- When the source reference and the inventory key are written differently -- different separators,
+  leading zeros, a prefix or year the reference does not carry -- set derived_key instead of relying on
+  normalizers. Whole-field normalizers cannot rebuild a key from parts. Declare source_templates and
+  inventory_templates over the same named parts, list in key_parts only the parts that genuinely identify
+  the record, and put per-part normalizers such as strip_zeros or pad:5 in normalizers. Give each side
+  more than one template when references arrive in shape variants. Use inventory_match_mode "prefix" when
+  inventory entries append free text after the key. A part written {name:d} matches digits, {name:a}
+  matches letters and digits, and a bare {name} runs up to the next literal character.
+- Do not put a part in key_parts unless both sides mean the same thing by it. A trailing code on a folder
+  is often a document-type code unrelated to the reference suffix, and keying on it matches nothing.
 - Conditions are ANDed. Use an always predicate only for a genuine catch-all route.
 - For an always predicate set field to the empty string and value to null. For is_blank and not_blank,
   set value to null.
