@@ -35,6 +35,7 @@ class SingleLinkRunner:
         repository_root: Path,
         compiler: CodexOAuthCompiler | None = None,
         approved_spec: Path | None = None,
+        compile_attempts: int = 3,
         ingestion_limits: IngestionLimits | None = None,
     ):
         self.store = store
@@ -47,6 +48,9 @@ class SingleLinkRunner:
         # Supplying one replaces compilation, not verification: the spec still
         # faces the same checks a compiled one does.
         self.approved_spec = approved_spec
+        # Bounded: an unbounded retry would let the compiler search until
+        # something passes, which is not the same as getting it right.
+        self.compile_attempts = max(1, compile_attempts)
         self.ingestion_limits = ingestion_limits or IngestionLimits()
 
     def _await_input(
@@ -203,7 +207,21 @@ class SingleLinkRunner:
                     },
                 )
                 return [("approved_spec", path), ("approved_spec_source", source)]
-            _, paths = self.compiler.compile(report=preparation, artifacts=artifacts)
+            # The verifier measures a proposal against this job's own evidence,
+            # so its findings are the most useful thing to hand back on a retry.
+            def check(candidate: MappingSpec) -> list[str]:
+                return list(
+                    verify_mapping_spec(
+                        job_id=job_id, spec=candidate, preparation=preparation
+                    ).errors
+                )
+
+            _, paths = self.compiler.compile(
+                report=preparation,
+                artifacts=artifacts,
+                verifier=check,
+                max_attempts=self.compile_attempts,
+            )
             return [("compiler_artifact", path) for path in paths]
 
         stage_runner._stage(
