@@ -320,6 +320,45 @@ def value_shape(value: str) -> str:
     return shape[:40]
 
 
+# A column with more distinct values than this identifies records rather than
+# grouping them, and listing its values would be a data dump, not a summary.
+MAX_DISTINCT_FOR_DISTRIBUTION = 25
+
+
+def value_distributions(
+    path: Path, *, max_distinct: int = MAX_DISTINCT_FOR_DISTRIBUTION
+) -> dict[str, dict[str, int]]:
+    """Every value of each low-cardinality column, with its row count.
+
+    Sample rows show what records look like; they do not show what values a
+    column can take. A Sheffield spec written from eight sampled rows routed
+    "Microfiche" and "Aperture", and so dropped the 14,340 U-Drive rows it never
+    saw and missed that the value is spelled "Aperture cards". Both are visible
+    the moment the column's values are counted, and neither is inferable from a
+    sample however it is drawn.
+    """
+    path = require_unprotected_path(path, operation="read compiler distribution")
+    counts: dict[str, dict[str, int]] = {}
+    dropped: set[str] = set()
+    with path.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
+        for index, row in enumerate(csv.DictReader(handle)):
+            if index >= SAMPLE_SCAN_LIMIT:
+                break
+            for column, value in row.items():
+                if column is None or column in dropped:
+                    continue
+                bucket = counts.setdefault(str(column), {})
+                cleaned = clean(value)[:120]
+                bucket[cleaned] = bucket.get(cleaned, 0) + 1
+                if len(bucket) > max_distinct:
+                    dropped.add(str(column))
+                    counts.pop(str(column), None)
+    return {
+        column: dict(sorted(values.items(), key=lambda item: -item[1]))
+        for column, values in counts.items()
+    }
+
+
 def sample_rows(path: Path, *, limit: int = 8) -> list[dict[str, str]]:
     """Show the compiler every naming convention present, not the first few rows.
 

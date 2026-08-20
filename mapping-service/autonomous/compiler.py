@@ -12,7 +12,7 @@ from .path_policy import (
     read_only_job_isolation_active,
     require_unprotected_path,
 )
-from .preparation import sample_rows
+from .preparation import sample_rows, value_distributions
 from .schemas import MappingSpec, PreparationReport
 from .storage import ArtifactStore
 
@@ -79,11 +79,15 @@ def compiler_packet(report: PreparationReport) -> dict[str, Any]:
             "fields": list(report.source_fields),
             "row_count": report.source_rows,
             "sample_rows": sample_rows(report.source_path),
+            # Sample rows show the shape of a record; these show what values a
+            # column can hold, which is what a route condition is written against.
+            "value_counts": value_distributions(report.source_path),
         },
         "inventory": {
             "fields": list(report.inventory_fields),
             "row_count": report.inventory_rows,
             "sample_rows": sample_rows(report.inventory_path),
+            "value_counts": value_distributions(report.inventory_path),
         },
         "capture_rule_chunks": [chunk.model_dump(mode="json") for chunk in report.capture_rule_chunks],
         "hard_constraints": {
@@ -132,6 +136,10 @@ MappingSpec schema. Your output is a proposal and will be rejected by an indepen
 
 Non-negotiable rules:
 - Use exactly the packet council and batch. Never infer another batch.
+- value_counts lists every value a low-cardinality column takes, with its row count. Account for all of
+  them: give each value that has its own evidence source a route, and let the catch-all reject the rest
+  deliberately. Copy values from value_counts exactly rather than from a sample row, because a condition
+  written as "Aperture" matches nothing when the column says "Aperture cards".
 - Routes are evaluated from the lowest priority number upwards, and the first match wins. Give accepting
   routes low numbers and put any catch-all reject route at the highest number, or the reject shadows
   everything and the mapping accepts nothing.
