@@ -267,6 +267,28 @@ class KeyDerivation:
     def inventory_template(self) -> Template:
         return self.inventory_templates[0]
 
+    def competing_keys(self, value: str, *, side: str = "inventory") -> tuple[tuple[str, ...], ...]:
+        """Every distinct key this value yields, not just the first template's.
+
+        _first_parse takes whichever alternative matches first and leaves no
+        trace that another also matched. That makes the key a function of the
+        order the templates happen to be listed in: EXE_1982_82-95-03 derives
+        ('82','95','') or ('82','95','03') from the same two templates,
+        depending only on which is written first. Nothing downstream can see
+        that a choice was made, so the wrong order surfaces as a bad join rate
+        with no cause attached.
+        """
+        templates = self.inventory_templates if side == "inventory" else self.source_templates
+        keys: list[tuple[str, ...]] = []
+        for template in templates:
+            parts = template.parse(value)
+            if not parts:
+                continue
+            key = self._key(parts)
+            if key is not None and key not in keys:
+                keys.append(key)
+        return tuple(keys)
+
     @staticmethod
     def _first_parse(templates: Sequence[Template], value: str) -> dict[str, str] | None:
         for template in templates:

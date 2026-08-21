@@ -326,12 +326,24 @@ def derived_key_join_errors(
         index = indexes.get(signature)
         if index is None:
             index = {}
+            contested: list[str] = []
             for candidate in inventory_rows:
                 raw = str(candidate.get(key_field) or "")
                 key = inventory_key(raw)
                 if key is not None:
                     index.setdefault(key, raw)
+                if derivation is not None and len(contested) < 3:
+                    competing = derivation.competing_keys(raw)
+                    if len(competing) > 1:
+                        contested.append(f"{raw!r} -> {list(competing)}")
             indexes[signature] = index
+            if contested:
+                errors.append(
+                    f"route {route.rule_id}: more than one inventory template parses the same value "
+                    f"to different keys, so the key depends on which template is written first "
+                    f"rather than on the data: {'; '.join(contested)}. Order the alternatives so the "
+                    "most specific comes first, or tighten them so only one can match a given shape."
+                )
 
         selected = rows_by_rule.get(route.rule_id, [])
         joined = 0
