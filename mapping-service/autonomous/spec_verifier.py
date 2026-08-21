@@ -76,11 +76,17 @@ def ambiguity_negative_test_errors(spec: MappingSpec, preparation: PreparationRe
         # the test would silently prove nothing.
         candidate_key_value = authoritative_value
         if route.derived_key is not None:
-            rendered = route.derived_key.build().inventory_value_for(authoritative_value)
+            derivation = route.derived_key.build()
+            rendered = derivation.inventory_value_for(authoritative_value)
             if rendered is None:
                 errors.append(
-                    f"route {route.rule_id}: derived key cannot render an inventory form for "
-                    f"{authoritative_value!r}, so ambiguity cannot be demonstrated"
+                    f"route {route.rule_id}: no inventory template can express reference "
+                    f"{authoritative_value!r} in a form that reads back to the same key. Its source "
+                    f"key is {derivation.source_key(authoritative_value)}. A derived key has to "
+                    "round-trip: whatever the source templates parse out, one inventory template "
+                    "must be able to write and re-parse. Check that every key_part a reference of "
+                    "this shape supplies has an inventory template needing exactly those parts, and "
+                    "that part_defaults do not leave a part empty inside a template that requires it."
                 )
                 continue
             candidate_key_value = rendered
@@ -112,9 +118,29 @@ def ambiguity_negative_test_errors(spec: MappingSpec, preparation: PreparationRe
         if mapping["amazons3_path"] or mapping["portal_path"]:
             errors.append(f"route {route.rule_id}: ambiguity negative test accepted a path")
         if audit["match_status"] != "rejected_ambiguous_multiple_candidates":
-            errors.append(
-                f"route {route.rule_id}: ambiguity negative test returned {audit['match_status']!r}"
+            # Naming only the status leaves nothing to act on: Test Valley was
+            # rejected three times over for "returned 'not_found'" and changed
+            # nothing that mattered. What the test did, and with which values,
+            # is what makes it fixable.
+            detail = (
+                f"route {route.rule_id}: the ambiguity negative test put two identical candidates in "
+                f"front of the engine and expected it to reject them, but it returned "
+                f"{audit['match_status']!r}. Reference {authoritative_value!r} was written as "
+                f"{candidate_key_value!r} in field {inventory_key!r}."
             )
+            if audit["match_status"] == "not_found":
+                detail += (
+                    " not_found means neither candidate matched at all, so this route would reject "
+                    "every real case too. The key derived from the reference and the key derived "
+                    "from that inventory spelling are not equal."
+                )
+                if route.derived_key is not None:
+                    derivation = route.derived_key.build()
+                    detail += (
+                        f" Source key {derivation.source_key(authoritative_value)}; "
+                        f"inventory key {derivation.inventory_key(candidate_key_value)}."
+                    )
+            errors.append(detail)
     return errors
 
 

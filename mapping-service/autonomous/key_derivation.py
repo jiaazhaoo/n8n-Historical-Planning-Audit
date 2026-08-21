@@ -325,15 +325,33 @@ class KeyDerivation:
         parts = self._first_parse(self.source_templates, source_value)
         if parts is None:
             return None
-        template = self.inventory_templates[0]
         filled = dict(self.defaults)
         filled.update(parts)
-        for name in template.part_names:
-            filled.setdefault(name, "0")
-        try:
-            return template.format(filled)
-        except DerivationError:
-            return None
+        # Alternatives exist because references come in different shapes, and a
+        # shorter reference leaves the parts a longer template needs empty.
+        # Always rendering with the first template puts those empty parts into
+        # the text -- Test Valley's TVN.03027/5 has no application type, so the
+        # longest template produced 'TVN..03027_5', which no template parses.
+        # Render with one whose parts this reference actually supplies, and
+        # confirm the result reads back before offering it.
+        for template in self.inventory_templates:
+            # A part the reference simply does not have is different from one
+            # the template never asked about. An empty application_type means
+            # this reference has no application type, so a template that writes
+            # one cannot express it; a part outside key_parts that nothing
+            # supplies is only structural filler for the synthetic candidate.
+            if any(name in filled and not str(filled[name]).strip() for name in template.part_names):
+                continue
+            candidate = dict(filled)
+            for name in template.part_names:
+                candidate.setdefault(name, "0")
+            try:
+                rendered = template.format(candidate)
+            except DerivationError:
+                continue
+            if self.inventory_key(rendered) == self.source_key(source_value):
+                return rendered
+        return None
 
     def describe(self) -> dict[str, Any]:
         return {
