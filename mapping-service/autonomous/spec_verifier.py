@@ -352,8 +352,8 @@ def derived_key_join_errors(
     return errors, warnings
 
 
-def inert_prefix_errors(spec: MappingSpec) -> list[str]:
-    """Refuse a prefix template that can never match a tail.
+def inert_prefix_warnings(spec: MappingSpec) -> list[str]:
+    """Note a prefix template that can never match a tail.
 
     Declaring prefix mode and then ending the template in an untyped part makes
     the part greedy, so the tail always matches empty and the join is exact
@@ -362,8 +362,14 @@ def inert_prefix_errors(spec: MappingSpec) -> list[str]:
     whose folders append the site address -- reported zero candidates and the
     run still passed at 90.1%. A join dry-run cannot catch it either, because
     the other eight years carry the rate.
+
+    A warning rather than an error: the stratum check already rejects the
+    damage this causes, with the real values that explain it, while an inert
+    prefix on its own is harmless -- Exeter WP3 joins 99.3% under this spelling
+    because its folders carry no trailing text, and rejecting it would cost a
+    compile attempt to change nothing.
     """
-    errors: list[str] = []
+    findings: list[str] = []
     for route in spec.routes:
         if route.derived_key is None:
             continue
@@ -374,7 +380,7 @@ def inert_prefix_errors(spec: MappingSpec) -> list[str]:
         for template in derivation.inventory_templates:
             if not template.prefix_is_inert:
                 continue
-            errors.append(
+            findings.append(
                 f"route {route.rule_id!r} declares inventory_match_mode 'prefix' but template "
                 f"{template.pattern!r} ends in an untyped part, which matches greedily and leaves "
                 "nothing for the trailing text, so the join is exact after all. Either give the "
@@ -385,7 +391,7 @@ def inert_prefix_errors(spec: MappingSpec) -> list[str]:
                 "'EXE_{year:d}_{yy:d}-{number:d}' -- with part_defaults for the parts a shorter "
                 "alternative does not supply."
             )
-    return errors
+    return findings
 
 
 BOOKKEEPING_FIELDS = {"_artifact_id"}
@@ -463,7 +469,7 @@ def verify_mapping_spec(
     cited_chunks: set[tuple[str, str, str]] = set()
     accepting_routes = 0
 
-    errors.extend(inert_prefix_errors(spec))
+    warnings.extend(inert_prefix_warnings(spec))
     condition_errors, condition_warnings = undiscriminating_condition_findings(spec, preparation)
     errors.extend(condition_errors)
     warnings.extend(condition_warnings)

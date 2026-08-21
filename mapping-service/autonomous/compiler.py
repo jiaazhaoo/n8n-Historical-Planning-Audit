@@ -140,6 +140,11 @@ Non-negotiable rules:
   them: give each value that has its own evidence source a route, and let the catch-all reject the rest
   deliberately. Copy values from value_counts exactly rather than from a sample row, because a condition
   written as "Aperture" matches nothing when the column says "Aperture cards".
+- A route owns every row its conditions select. A key that fails to join does NOT fall through to a
+  later route, so a second accepting route for the same population is unreachable dead weight. When
+  one population writes its reference in more than one shape, put every shape in a single
+  derived_key: list them as source_templates alternatives, list the folder shapes as
+  inventory_templates alternatives, and give part_defaults for the parts a shorter shape omits.
 - Routes are evaluated from the lowest priority number upwards, and the first match wins. Give accepting
   routes low numbers and put any catch-all reject route at the highest number, or the reject shadows
   everything and the mapping accepts nothing.

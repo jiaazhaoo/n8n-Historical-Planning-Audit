@@ -35,7 +35,7 @@ class SingleLinkRunner:
         repository_root: Path,
         compiler: CodexOAuthCompiler | None = None,
         approved_spec: Path | None = None,
-        compile_attempts: int = 3,
+        compile_attempts: int = 5,
         ingestion_limits: IngestionLimits | None = None,
     ):
         self.store = store
