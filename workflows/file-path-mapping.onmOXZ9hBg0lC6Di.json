@@ -12,6 +12,17 @@
         ]
       ]
     },
+    "Case review": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Sampling budget",
+            "type": "main"
+          }
+        ]
+      ]
+    },
     "Compile rules and map every case": {
       "main": [
         [
@@ -126,6 +137,24 @@
           {
             "index": 0,
             "node": "Rework budget",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Sampling budget": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Quality round on working pool",
+            "type": "main"
+          }
+        ],
+        [
+          {
+            "index": 0,
+            "node": "Case review required",
             "type": "main"
           }
         ]
@@ -481,7 +510,7 @@
       "id": "case-review",
       "name": "Case review",
       "parameters": {
-        "jsCode": "const review = $json;\nconst next = review.next || {};\nconst plan = review.sampling_plan || {};\n// The loop advances one round per submission: the state file remembers which\n// cases each round drew, so resubmitting samples ground this batch has not seen.\nreturn [{json:{\n  status: \"quality_gate_failed_cases\",\n  production_published: false,\n  action: next.action,\n  detail: next.detail,\n  focus: next.focus || [],\n  round_index: review.round_index,\n  next_round_index: (review.round_index || 0) + 1,\n  sampled_ids: review.sampled_ids,\n  metrics: review.metrics,\n  coverage: review.coverage,\n  working_pool_remaining: Math.max(0, (plan.working_cases || 0) - (review.sampled_ids || []).length),\n  quality_report: review.quality_report,\n  guidance: \"Failures do not share a signature. Inspect the named cases in the quality report before changing anything; a spec change made without a shared cause tends to fit the sample.\",\n}}];"
+        "jsCode": "// investigate_cases means the failures are scattered, not a shared cause, so a\n// recompile would fit the spec to two cases out of twelve. What resolves it is\n// evidence: another round says whether those failures are noise or a systematic\n// share the first sample was too small to separate. The spec is untouched.\nconst review = $json;\nconst mapping = $('Mapping outputs').first().json;\nconst next = review.next || {};\nconst plan = review.sampling_plan || {};\nconst rounds = Number(review.round_index || 0);\n\nreturn [{json:{\n  ...mapping,\n  status: 'quality_gate_failed_cases',\n  production_published: false,\n  action: next.action,\n  detail: next.detail,\n  focus: next.focus || [],\n  round_index: rounds,\n  next_round_index: rounds + 1,\n  sampled_ids: review.sampled_ids,\n  metrics: review.metrics,\n  coverage: review.coverage,\n  working_pool_remaining: Math.max(0, (plan.working_cases || 0) - (review.sampled_ids || []).length),\n  quality_report: review.quality_report,\n}}];"
       },
       "position": [
         1104,
@@ -571,6 +600,61 @@
       "position": [
         1544,
         288
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "sampling-budget-if",
+      "name": "Sampling budget",
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "under-round-limit",
+              "leftValue": "={{ $json.round_index }}",
+              "operator": {
+                "operation": "lt",
+                "type": "number"
+              },
+              "rightValue": 4
+            },
+            {
+              "id": "pool-left",
+              "leftValue": "={{ $json.working_pool_remaining }}",
+              "operator": {
+                "operation": "gt",
+                "type": "number"
+              },
+              "rightValue": 0
+            }
+          ],
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          }
+        },
+        "options": {}
+      },
+      "position": [
+        1324,
+        288
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2
+    },
+    {
+      "id": "case-review-required",
+      "name": "Case review required",
+      "parameters": {
+        "jsCode": "// Four rounds without the picture changing is not a sampling problem. What is\n// left is a judgement about specific cases, which is what the branch is named\n// after.\nconst j = $json;\nreturn [{json:{\n  status: 'case_review_required',\n  production_published: false,\n  rounds_sampled: Number(j.round_index || 0),\n  working_pool_remaining: j.working_pool_remaining,\n  action: j.action,\n  detail: j.detail,\n  focus: j.focus || [],\n  metrics: j.metrics,\n  coverage: j.coverage,\n  quality_report: j.quality_report,\n}}];"
+      },
+      "position": [
+        1544,
+        448
       ],
       "type": "n8n-nodes-base.code",
       "typeVersion": 2
