@@ -144,6 +144,7 @@ def ambiguity_negative_test_errors(spec: MappingSpec, preparation: PreparationRe
     return errors
 
 
+MIN_INVENTORY_COVERAGE = 0.50
 MIN_STRATUM_CASES = 30
 MAX_STRATUM_VALUES = 60
 STRATUM_SHORTFALL = 0.25
@@ -304,6 +305,7 @@ def derived_key_join_errors(
     # same index; building it once per distinct derivation keeps a large
     # inventory from being walked once per route.
     indexes: dict[str, dict[tuple[str, ...], str]] = {}
+    coverages: dict[str, tuple[dict[str, int], dict[str, str]]] = {}
 
     for route in routes:
         derivation = route.derived_key.build() if route.derived_key else None
@@ -327,16 +329,23 @@ def derived_key_join_errors(
         if index is None:
             index = {}
             contested: list[str] = []
+            unparsed: dict[str, int] = {}
+            unparsed_examples: dict[str, str] = {}
             for candidate in inventory_rows:
                 raw = str(candidate.get(key_field) or "")
                 key = inventory_key(raw)
                 if key is not None:
                     index.setdefault(key, raw)
+                elif raw.strip():
+                    shape = re.sub(r"\d", "#", raw)[:40]
+                    unparsed[shape] = unparsed.get(shape, 0) + 1
+                    unparsed_examples.setdefault(shape, raw)
                 if derivation is not None and len(contested) < 3:
                     competing = derivation.competing_keys(raw)
                     if len(competing) > 1:
                         contested.append(f"{raw!r} -> {list(competing)}")
             indexes[signature] = index
+            coverages[signature] = (unparsed, unparsed_examples)
             if contested:
                 errors.append(
                     f"route {route.rule_id}: more than one inventory template parses the same value "
@@ -360,6 +369,22 @@ def derived_key_join_errors(
             source_keys.append((key, value))
             if key in index:
                 joined += 1
+
+        unparsed, unparsed_examples = coverages.get(signature, ({}, {}))
+        parsed = len(inventory_rows) - sum(unparsed.values())
+        if unparsed and parsed < len(inventory_rows) * MIN_INVENTORY_COVERAGE:
+            listed = "; ".join(
+                f"{count} like {unparsed_examples[shape]!r}"
+                for shape, count in sorted(unparsed.items(), key=lambda item: -item[1])[:3]
+            )
+            errors.append(
+                f"route {route.rule_id}: the inventory templates read "
+                f"{parsed}/{len(inventory_rows)} entries ({parsed / len(inventory_rows):.1%}); the "
+                f"rest are shapes no template covers -- {listed}. Folders of a council differ mainly "
+                "in the suffix they carry, so a template written for one suffix leaves every other "
+                "one unreachable. Add an alternative for each shape present, or end the template "
+                "before the part that varies."
+            )
 
         stratum_errors, stratum_warnings = _stratum_findings(
             route.rule_id, source_keys, index
