@@ -143,16 +143,34 @@ def derived_key_join_errors(
     if not source_rows or not inventory_rows:
         return errors, warnings
 
+    # Route selection is a property of the row, not of the route being examined.
+    # Asking it once per row per route made this quadratic in the number of
+    # routes, which a four-route Sheffield spec over 26,384 rows felt as minutes.
+    rows_by_rule: dict[str, list[dict[str, str]]] = {}
+    for row in source_rows:
+        chosen = route_for(row, spec)
+        if chosen is not None:
+            rows_by_rule.setdefault(chosen.rule_id, []).append(row)
+
+    # Routes that declare the same derivation over the same column produce the
+    # same index; building it once per distinct derivation keeps a large
+    # inventory from being walked once per route.
+    indexes: dict[str, set[tuple[str, ...]]] = {}
+
     for route in routes:
         derivation = route.derived_key.build()
         key_field = route.inventory_key_field or spec.inventory_key_field
-        index: set[tuple[str, ...]] = set()
-        for candidate in inventory_rows:
-            key = derivation.inventory_key(str(candidate.get(key_field) or ""))
-            if key is not None:
-                index.add(key)
+        signature = f"{key_field}\0{route.derived_key.model_dump_json()}"
+        index = indexes.get(signature)
+        if index is None:
+            index = set()
+            for candidate in inventory_rows:
+                key = derivation.inventory_key(str(candidate.get(key_field) or ""))
+                if key is not None:
+                    index.add(key)
+            indexes[signature] = index
 
-        selected = [row for row in source_rows if route_for(row, spec) == route]
+        selected = rows_by_rule.get(route.rule_id, [])
         joined = 0
         keyed = 0
         for row in selected:
