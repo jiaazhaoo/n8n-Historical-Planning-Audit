@@ -33,6 +33,8 @@ AUTONOMOUS_ENTRYPOINT = REPOSITORY_ROOT / "amazons3-mapping" / "autonomous_mappi
 sys.path.insert(0, str(REPOSITORY_ROOT / "amazons3-mapping"))
 from autonomous.path_policy import read_only_job_isolated_command  # noqa: E402
 DATA_ROOT = Path("/data")
+# Out of bounds for every path this service handles, with no exception left:
+# the workflow reads and writes only under /data/<council>/.
 PROTECTED_ROOT = DATA_ROOT / "file-browser-data"
 JOBS_ROOT = DATA_ROOT / "mapping-jobs"
 CODEX_RUNTIME_HOME = JOBS_ROOT / "codex-runtime"
@@ -88,6 +90,17 @@ def slug(value: str, *, label: str) -> str:
     if not cleaned:
         raise MappingServiceError(f"{label} must contain letters or digits")
     return cleaned
+
+
+def council_matching_table(council: str) -> Path:
+    """The council's own matching table, which is the only one this service touches.
+
+    Everything this workflow reads or writes lives under /data/<council>/. The
+    file-browser tree holds a copy of the same table, identical in columns and
+    row count, and is out of bounds: the service is not the thing that decides
+    what a browser serves.
+    """
+    return DATA_ROOT / council / "file-matching" / f"{council}-matching.csv"
 
 
 def safe_data_path(value: str, *, kind: str = "file") -> Path:
@@ -431,7 +444,7 @@ def ensure_inventory(council: str, *, rebuild: bool = False) -> tuple[Path | Non
         raise MappingServiceError(str(exc)) from exc
 
     summary = summarise(rows, sources)
-    delivered_csv = PROTECTED_ROOT / council / f"{council}-matching.csv"
+    delivered_csv = council_matching_table(council)
     if delivered_csv.is_file():
         # A tree the delivered mapping points into but no source lists is a
         # missing tree, and it is far cheaper to say so here than to infer it
@@ -877,11 +890,12 @@ def run_publish(payload: dict[str, Any]) -> dict[str, Any]:
         )
 
     mapping_csv = safe_data_path(str((report.get("outputs") or {}).get("mapping_total") or ""))
-    # Deliberately not routed through safe_data_path: that helper exists to keep
-    # every other operation out of this tree.
-    runtime_csv = PROTECTED_ROOT / council / f"{council}-matching.csv"
+    runtime_csv = council_matching_table(council)
     if not runtime_csv.is_file():
-        raise MappingServiceError(f"Runtime table does not exist: {runtime_csv}")
+        raise MappingServiceError(f"Council matching table does not exist: {runtime_csv}")
+    # Routed through the same guard as everything else, so no path in this
+    # service can reach the file-browser tree even by construction.
+    runtime_csv = safe_data_path(str(runtime_csv))
 
     try:
         result = publish_mapping(
