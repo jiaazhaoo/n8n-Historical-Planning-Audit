@@ -208,6 +208,22 @@ def write_csv(path: Path, rows: Iterable[dict[str, str]], fields: tuple[str, ...
 EXCEL_CELL_LIMIT = 32767
 
 
+# Control characters are legal in a CSV cell and not in an XLSX one. Mansfield's
+# charge text carries DLE bytes inside a condition -- "...2021/0340/TPO \x10TOLD
+# TO SUBMIT DISCHARGE OF CONDITIONS APP\x10..." -- and openpyxl refused the
+# whole export, so a mapping that had completed produced no spreadsheet.
+ILLEGAL_XLSX_CHARACTERS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+
+def xlsx_text(value: str) -> str:
+    """The cell text, with characters a spreadsheet cannot hold removed.
+
+    Dropped rather than escaped: these are stray bytes in scanned-record text,
+    not content, and the CSV beside it keeps the value exactly as it was.
+    """
+    return ILLEGAL_XLSX_CHARACTERS.sub("", value)
+
+
 def write_xlsx(path: Path, rows: Iterable[dict[str, str]], fields: tuple[str, ...], *, sheet: str) -> None:
     """Write a mapping table as .xlsx alongside the canonical CSV.
 
@@ -234,7 +250,7 @@ def write_xlsx(path: Path, rows: Iterable[dict[str, str]], fields: tuple[str, ..
     for row in rows:
         values = []
         for index, field in enumerate(fields):
-            value = str(row.get(field, "") or "")
+            value = xlsx_text(str(row.get(field, "") or ""))
             if len(value) > EXCEL_CELL_LIMIT:
                 raise MappingServiceError(
                     f"Value for {field!r} exceeds the Excel cell limit; export the CSV instead"
