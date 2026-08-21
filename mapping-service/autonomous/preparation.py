@@ -340,10 +340,15 @@ def value_distributions(
     path = require_unprotected_path(path, operation="read compiler distribution")
     counts: dict[str, dict[str, int]] = {}
     dropped: set[str] = set()
+    # Deliberately the whole file. Capping the scan reintroduces the very thing
+    # this function exists to remove: Sheffield's inventory is ordered by source,
+    # so the first 20,000 rows are all Fiche, and a capped count told the
+    # compiler that Aperture and U-Drive had no evidence at all. A column that
+    # stays low-cardinality costs one counter per value however many rows there
+    # are, and a column that does not is dropped as soon as it exceeds the
+    # ceiling.
     with path.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
-        for index, row in enumerate(csv.DictReader(handle)):
-            if index >= SAMPLE_SCAN_LIMIT:
-                break
+        for row in csv.DictReader(handle):
             for column, value in row.items():
                 if column is None or column in dropped:
                     continue

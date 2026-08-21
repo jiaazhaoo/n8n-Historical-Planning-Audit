@@ -88,6 +88,28 @@ class ValueDistributionTests(unittest.TestCase):
             self.assertTrue(counted >= sampled)
 
 
+class WholeFileCountingTests(unittest.TestCase):
+    def test_a_value_beyond_any_scan_window_is_still_counted(self) -> None:
+        # Sheffield's inventory is ordered by source, so a capped scan saw only
+        # Fiche and told the compiler that Aperture and U-Drive had no evidence.
+        # The compiler then correctly rejected them, on a false premise.
+        with tempfile.TemporaryDirectory() as temporary:
+            rows = [{"source": "fiche", "folder": f"F{i}"} for i in range(25000)]
+            rows += [{"source": "aperture", "folder": f"A{i}"} for i in range(30)]
+            path = write(Path(temporary) / "inventory.csv", rows)
+            counts = value_distributions(path)["source"]
+            self.assertEqual(counts, {"fiche": 25000, "aperture": 30})
+
+    def test_counting_the_whole_file_stays_cheap(self) -> None:
+        # The cost is one counter per distinct value, not per row.
+        with tempfile.TemporaryDirectory() as temporary:
+            rows = [{"source": "fiche" if i % 2 else "u-drive"} for i in range(50000)]
+            path = write(Path(temporary) / "inventory.csv", rows)
+            counts = value_distributions(path)["source"]
+            self.assertEqual(sum(counts.values()), 50000)
+            self.assertEqual(len(counts), 2)
+
+
 class PromptTests(unittest.TestCase):
     def test_the_prompt_tells_the_compiler_to_account_for_every_value(self) -> None:
         prompt = compiler_prompt(Path("/tmp/packet.json"), {"a": 1})
