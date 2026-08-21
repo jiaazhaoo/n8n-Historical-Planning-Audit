@@ -23,6 +23,17 @@
         ]
       ]
     },
+    "Case review required": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Needs attention",
+            "type": "main"
+          }
+        ]
+      ]
+    },
     "Cleared by holdout": {
       "main": [
         [
@@ -98,6 +109,28 @@
         ]
       ]
     },
+    "Holdout gate failed": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Needs attention",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Input defect": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Needs attention",
+            "type": "main"
+          }
+        ]
+      ]
+    },
     "Mapping job input": {
       "main": [
         [
@@ -115,6 +148,17 @@
           {
             "index": 0,
             "node": "Quality round on working pool",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Pool exhausted": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Needs attention",
             "type": "main"
           }
         ]
@@ -171,6 +215,17 @@
         ]
       ]
     },
+    "Rework exhausted": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Needs attention",
+            "type": "main"
+          }
+        ]
+      ]
+    },
     "Rule defect": {
       "main": [
         [
@@ -195,6 +250,17 @@
           {
             "index": 0,
             "node": "Case review required",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Unrecognised outcome": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Needs attention",
             "type": "main"
           }
         ]
@@ -779,6 +845,19 @@
       ],
       "type": "n8n-nodes-base.code",
       "typeVersion": 2
+    },
+    {
+      "id": "needs-attention",
+      "name": "Needs attention",
+      "parameters": {
+        "errorMessage": "={{ $json.status }}: {{ $json.detail || ($json.acceptance_reasons || []).join('; ') || ($json.focus || []).join('; ') || 'this run produced no mapping' }}"
+      },
+      "position": [
+        2092,
+        420
+      ],
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1
     }
   ],
   "pinData": {},
