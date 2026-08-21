@@ -5,6 +5,7 @@ import hashlib
 import json
 import re
 import subprocess
+import sys
 import zipfile
 from datetime import date, datetime
 from pathlib import Path
@@ -27,6 +28,15 @@ from .storage import ArtifactStore
 
 class PreparationError(RuntimeError):
     pass
+
+
+# Python allows 128 KB per CSV field, and evidence exceeds it: Test Valley's
+# portal audit concatenates every candidate it found for a reference into one
+# cell, and preparation died reading its own inventory rather than reporting
+# anything about the data. The same figure the engine and the builders already
+# use -- a smaller one here would only make the effective limit depend on which
+# module was imported last, since the engine resets it on every read.
+csv.field_size_limit(sys.maxsize)
 
 
 def scalar_text(value: Any) -> str:
