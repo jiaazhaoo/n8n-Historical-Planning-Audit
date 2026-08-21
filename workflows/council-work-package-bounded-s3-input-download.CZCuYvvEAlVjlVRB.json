@@ -118,7 +118,21 @@
               "fieldLabel": "Source path",
               "fieldName": "source_path",
               "fieldType": "text",
-              "placeholder": "/rmsiscratch/production/input/<Council>/Work packages/<Batch>",
+              "placeholder": "rmsiscratch/production/input/Exeter/Work Packages/Microfiche Capture 1977-1985",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Council",
+              "fieldName": "council",
+              "fieldType": "text",
+              "placeholder": "exeter",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Batch",
+              "fieldName": "batch",
+              "fieldType": "text",
+              "placeholder": "microfiche-capture-1977-1985",
               "requiredField": true
             }
           ]
@@ -140,7 +154,7 @@
       "id": "parse",
       "name": "Parse and restrict path",
       "parameters": {
-        "jsCode": "const source = String($json.source_path || '').replace(/\\/+$/, '');\nconst parts = source.split('/').filter(Boolean);\nif (parts.length !== 6 || parts[0] !== 'rmsiscratch' || parts[1] !== 'production' || parts[2] !== 'input' || parts[4].toLowerCase() !== 'work packages' || parts.some(p => p === '.' || p === '..')) throw new Error('Input must be /rmsiscratch/production/input/<Council>/Work Packages/<Batch>.');\nconst slug = value => value.toLowerCase().replace(/^work\\s+package\\s*/i, 'workpackage').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');\nconst council = slug(parts[3]); const batch = slug(parts[5]);\nif (!council || !batch) throw new Error('Council and batch must contain letters or digits.');\nconst workPackagesSegment = council === 'braintree' ? 'Work packages' : parts[4];\nconst run_timestamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\\.\\d{3}Z$/, 'Z');\nreturn [{json:{source_path:source,bucket:'rmsiscratch',prefix:[parts[1],parts[2],parts[3],workPackagesSegment,parts[5]].join('/')+'/',council,batch,run_timestamp,destination:`/data/${council}/input-landmark/${batch}_${run_timestamp}`,report_directory:`/data/${council}/download_reports`,report_filename:`${council}_${batch}_initial_${run_timestamp}.json`}}];"
+        "jsCode": "// The path is a path. Council and batch come from the form, because they name\n// the batch everything downstream is keyed on -- the input directory, the log,\n// and later <council>-<batch>-full-mapping.csv -- and reading them out of fixed\n// positions in the path only worked while every input sat under\n// rmsiscratch/production/input/<Council>/Work Packages/<Batch>.\nconst source = String($json.source_path || '').trim().replace(/^\\/+|\\/+$/g, '');\nconst parts = source.split('/').filter(Boolean);\nif (parts.length < 2) throw new Error('Source path must name a bucket and at least one prefix segment.');\nif (parts.some(p => p === '.' || p === '..')) throw new Error('Source path must not contain . or .. segments.');\nif (/[\\x00-\\x1f]/.test(source)) throw new Error('Source path must not contain control characters.');\n\nconst slug = value => String(value || '').trim().toLowerCase()\n  .replace(/^work\\s+package\\s*/i, 'workpackage')\n  .replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');\nconst council = slug($json.council);\nconst batch = slug($json.batch);\nif (!council) throw new Error('Council is required and must contain letters or digits.');\nif (!batch) throw new Error('Batch is required and must contain letters or digits.');\n\nconst bucket = parts[0];\nconst prefix = parts.slice(1).join('/') + '/';\nconst run_timestamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\\.\\d{3}Z$/, 'Z');\nreturn [{json:{\n  source_path: source,\n  bucket,\n  prefix,\n  council,\n  batch,\n  run_timestamp,\n  destination: `/data/${council}/input-landmark/${batch}_${run_timestamp}`,\n  report_directory: `/data/${council}/download_reports`,\n  report_filename: `${council}_${batch}_initial_${run_timestamp}.json`,\n}}];"
       },
       "position": [
         -400,
