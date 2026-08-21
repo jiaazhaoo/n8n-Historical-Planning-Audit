@@ -305,7 +305,7 @@ def derived_key_join_errors(
     # same index; building it once per distinct derivation keeps a large
     # inventory from being walked once per route.
     indexes: dict[str, dict[tuple[str, ...], str]] = {}
-    coverages: dict[str, tuple[dict[str, int], dict[str, str]]] = {}
+    coverages: dict[str, tuple[dict[str, int], dict[str, int], dict[str, dict[str, int]], dict[tuple[str, str], str]]] = {}
 
     for route in routes:
         derivation = route.derived_key.build() if route.derived_key else None
@@ -329,23 +329,34 @@ def derived_key_join_errors(
         if index is None:
             index = {}
             contested: list[str] = []
-            unparsed: dict[str, int] = {}
-            unparsed_examples: dict[str, str] = {}
+            # Counted per source tree. A multi-source inventory is a union of
+            # trees that name their files differently, and one derivation can
+            # only ever read the tree it was written for: Sheffield's SHE_
+            # templates read fiche and aperture in full while 54,751 u-drive
+            # files stay unreadable, which is another route's business, not a
+            # defect in this one.
+            read: dict[str, int] = {}
+            unread: dict[str, int] = {}
+            shapes: dict[str, dict[str, int]] = {}
+            examples: dict[tuple[str, str], str] = {}
             for candidate in inventory_rows:
                 raw = str(candidate.get(key_field) or "")
+                tree = str(candidate.get("source") or "")
                 key = inventory_key(raw)
                 if key is not None:
                     index.setdefault(key, raw)
+                    read[tree] = read.get(tree, 0) + 1
                 elif raw.strip():
+                    unread[tree] = unread.get(tree, 0) + 1
                     shape = re.sub(r"\d", "#", raw)[:40]
-                    unparsed[shape] = unparsed.get(shape, 0) + 1
-                    unparsed_examples.setdefault(shape, raw)
+                    shapes.setdefault(tree, {})[shape] = shapes.setdefault(tree, {}).get(shape, 0) + 1
+                    examples.setdefault((tree, shape), raw)
                 if derivation is not None and len(contested) < 3:
                     competing = derivation.competing_keys(raw)
                     if len(competing) > 1:
                         contested.append(f"{raw!r} -> {list(competing)}")
             indexes[signature] = index
-            coverages[signature] = (unparsed, unparsed_examples)
+            coverages[signature] = (read, unread, shapes, examples)
             if contested:
                 errors.append(
                     f"route {route.rule_id}: more than one inventory template parses the same value "
@@ -370,20 +381,27 @@ def derived_key_join_errors(
             if key in index:
                 joined += 1
 
-        unparsed, unparsed_examples = coverages.get(signature, ({}, {}))
-        parsed = len(inventory_rows) - sum(unparsed.values())
-        if unparsed and parsed < len(inventory_rows) * MIN_INVENTORY_COVERAGE:
+        read, unread, shapes, examples = coverages.get(signature, ({}, {}, {}, {}))
+        for tree in sorted(set(read) | set(unread)):
+            hit, missed = read.get(tree, 0), unread.get(tree, 0)
+            total = hit + missed
+            # A tree this derivation reads none of belongs to another route.
+            # Only a tree it reads part of is one it was written for, and there
+            # a shortfall is a template that covers some spellings and not
+            # others.
+            if not hit or not missed or hit >= total * MIN_INVENTORY_COVERAGE:
+                continue
             listed = "; ".join(
-                f"{count} like {unparsed_examples[shape]!r}"
-                for shape, count in sorted(unparsed.items(), key=lambda item: -item[1])[:3]
+                f"{count} like {examples[(tree, shape)]!r}"
+                for shape, count in sorted(shapes.get(tree, {}).items(), key=lambda item: -item[1])[:3]
             )
+            where = f" of {tree!r}" if tree else ""
             errors.append(
-                f"route {route.rule_id}: the inventory templates read "
-                f"{parsed}/{len(inventory_rows)} entries ({parsed / len(inventory_rows):.1%}); the "
-                f"rest are shapes no template covers -- {listed}. Folders of a council differ mainly "
-                "in the suffix they carry, so a template written for one suffix leaves every other "
-                "one unreachable. Add an alternative for each shape present, or end the template "
-                "before the part that varies."
+                f"route {route.rule_id}: the inventory templates read {hit}/{total} entries"
+                f"{where} ({hit / total:.1%}); the rest are shapes no template covers -- {listed}. "
+                "Folders of one tree differ mainly in the suffix they carry, so a template written "
+                "for one suffix leaves every other one unreachable. Add an alternative for each "
+                "shape present, or end the template before the part that varies."
             )
 
         stratum_errors, stratum_warnings = _stratum_findings(

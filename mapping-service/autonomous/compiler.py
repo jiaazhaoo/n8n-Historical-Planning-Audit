@@ -407,12 +407,21 @@ class CodexOAuthCompiler:
             raise CompilerError("Codex compiler completed without writing its structured output")
         try:
             spec = load_compiled_spec(attempt_output)
-        except CompilerError:
+        except CompilerError as exc:
             failed_path = artifacts.write_mutable(
                 f"{root}/mapping-spec.failed.json", attempt_output.read_bytes()
             )
             attempt_output.unlink()
-            raise CompilerError(f"Codex output failed MappingSpec validation; inspect {failed_path}")
+            # The reason travels with the rejection, not the path to it. The
+            # compiler reads a prompt inside a sandbox and cannot open a file,
+            # so naming one told it nothing: Sheffield spent two of its five
+            # attempts blind, and its actual fault -- a template naming the same
+            # part twice -- was already spelled out in the message thrown away.
+            reason = " ".join(str(exc).split())
+            raise CompilerError(
+                f"The proposal did not validate against the MappingSpec schema: {reason[:1200]} "
+                f"(kept at {failed_path})"
+            )
         raw_output = artifacts.write_immutable(
             f"{root}/mapping-spec.raw.json", attempt_output.read_bytes()
         )
