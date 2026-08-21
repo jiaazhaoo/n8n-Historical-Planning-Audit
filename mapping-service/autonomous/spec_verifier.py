@@ -494,6 +494,101 @@ def undiscriminating_condition_findings(
     return errors, warnings
 
 
+BETTER_KEY_MARGIN = 0.10
+MIN_KEY_COMPARISON_CASES = 30
+
+
+def _reference_pair(value: str) -> tuple[str, str] | None:
+    """The two-digit year and number a reference carries, however it is spelled.
+
+    Deliberately not the route's own templates. Those are written around
+    whichever field the spec already chose, so parsing a rival field through
+    them scores zero and confirms the original choice -- Sheffield's
+    further-information-reference reads 0% that way and 96.8% on its own terms.
+    """
+    groups = re.findall(r"\d+", value or "")
+    for position, left in enumerate(groups[:-1]):
+        if len(left) == 2:
+            return (left, str(int(groups[position + 1])))
+    return None
+
+
+def better_key_findings(
+    spec: MappingSpec, preparation: PreparationReport
+) -> tuple[list[str], list[str]]:
+    """Ask whether another available field identifies the case better.
+
+    Nothing challenged the compiler's choice of authoritative key. Verification
+    asks whether a spec is coherent and whether it joins; Sheffield's Aperture
+    route joined 78.2% on xml_altref, which trips no threshold, while
+    further-information-reference joined 96.8% of the same rows -- 183 cases, a
+    tenth of the batch, lost to a choice nothing examined.
+
+    Both sides are read the same generic way so the comparison measures the
+    field rather than the templates written around it.
+    """
+    errors: list[str] = []
+    warnings: list[str] = []
+    accepting = [r for r in spec.routes if r.target != RouteTarget.REJECT and r.authoritative_key]
+    if not accepting:
+        return errors, warnings
+    try:
+        _, source_rows = read_csv(preparation.source_path)
+        _, inventory_rows = read_csv(preparation.inventory_path)
+    except OSError:
+        return errors, warnings
+    if not source_rows or not inventory_rows:
+        return errors, warnings
+
+    rows_by_rule: dict[str, list[dict[str, str]]] = {}
+    for row in source_rows:
+        route = route_for(row, spec)
+        if route is not None:
+            rows_by_rule.setdefault(route.rule_id, []).append(row)
+
+    indexes: dict[str, set[tuple[str, str]]] = {}
+    for route in accepting:
+        key_field = route.inventory_key_field or spec.inventory_key_field
+        if key_field not in indexes:
+            pairs = {_reference_pair(str(c.get(key_field) or "")) for c in inventory_rows}
+            pairs.discard(None)
+            indexes[key_field] = pairs
+
+    for route in accepting:
+        selected = rows_by_rule.get(route.rule_id, [])
+        if len(selected) < MIN_KEY_COMPARISON_CASES:
+            continue
+        index = indexes[route.inventory_key_field or spec.inventory_key_field]
+        if not index:
+            continue
+        scores: dict[str, float] = {}
+        for field in preparation.source_fields:
+            if field.startswith("_"):
+                continue
+            hits = sum(1 for row in selected if _reference_pair(row.get(field, "")) in index)
+            if hits:
+                scores[field] = hits / len(selected)
+        current = scores.get(route.authoritative_key, 0.0)
+        if not scores:
+            continue
+        best_field = max(scores, key=lambda name: scores[name])
+        if best_field == route.authoritative_key:
+            continue
+        gain = scores[best_field] - current
+        if gain < BETTER_KEY_MARGIN:
+            continue
+        errors.append(
+            f"route {route.rule_id}: authoritative_key {route.authoritative_key!r} identifies "
+            f"{current:.1%} of the {len(selected)} cases this route selects against the inventory, "
+            f"while {best_field!r} identifies {scores[best_field]:.1%} of the same rows "
+            f"({round(gain * len(selected))} more cases). Both were read the same way, so this is "
+            "about which field names the case, not about the templates. Route on the field that "
+            "identifies it, adding a separate route where different populations use different "
+            "fields, and write source_templates for the shape that field actually has."
+        )
+    return errors, warnings
+
+
 def verify_mapping_spec(
     *,
     job_id: str,
@@ -514,6 +609,9 @@ def verify_mapping_spec(
     prefix_errors, prefix_warnings = inert_prefix_findings(spec)
     errors.extend(prefix_errors)
     warnings.extend(prefix_warnings)
+    key_errors, key_warnings = better_key_findings(spec, preparation)
+    errors.extend(key_errors)
+    warnings.extend(key_warnings)
     condition_errors, condition_warnings = undiscriminating_condition_findings(spec, preparation)
     errors.extend(condition_errors)
     warnings.extend(condition_warnings)
