@@ -421,6 +421,32 @@ def ensure_inventory(council: str, *, rebuild: bool = False) -> tuple[Path | Non
     return inventory, summary
 
 
+MAX_PRIOR_FINDINGS = 12
+MAX_FINDING_CHARACTERS = 600
+
+
+def prior_findings_value(value: Any) -> list[list[str]]:
+    """Normalise what a caller says an earlier spec got wrong.
+
+    Bounded on both axes: the prompt has to stay readable, and a caller looping
+    a failing batch must not grow it without limit.
+    """
+    if not value:
+        return []
+    rounds = value if isinstance(value, list) else [value]
+    findings: list[list[str]] = []
+    for entry in rounds[:MAX_PRIOR_FINDINGS]:
+        items = entry if isinstance(entry, list) else [entry]
+        cleaned = [
+            str(item).strip()[:MAX_FINDING_CHARACTERS]
+            for item in items
+            if item is not None and str(item).strip()
+        ]
+        if cleaned:
+            findings.append(cleaned)
+    return findings
+
+
 def run_mapping(payload: dict[str, Any]) -> dict[str, Any]:
     council = slug(str(payload.get("council") or ""), label="council")
     batch = str(payload.get("batch") or "").strip()
@@ -520,6 +546,17 @@ def run_mapping(payload: dict[str, Any]) -> dict[str, Any]:
     ]
     if approved_spec is not None:
         command.extend(("--approved-spec", str(approved_spec)))
+
+    # A rework carries what the last quality round found wrong. Written beside
+    # the submission so the reason a spec was rewritten stays with the job that
+    # rewrote it.
+    findings = prior_findings_value(payload.get("prior_findings"))
+    if findings:
+        findings_path = submission / "prior-findings.json"
+        findings_path.write_text(
+            json.dumps(findings, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        command.extend(("--prior-findings", str(findings_path)))
     result = subprocess.run(
         read_only_job_isolated_command(
             command,
@@ -569,6 +606,10 @@ def run_mapping(payload: dict[str, Any]) -> dict[str, Any]:
     report["selected_portal_evidence"] = [str(path) for path in portal_paths]
     report["approved_spec"] = str(approved_spec) if approved_spec else None
     report["spec_source"] = "approved" if approved_spec else "compiled"
+    # Echoed so a rework loop reads its own depth from the data rather than from
+    # a node that the loop's return path never re-executes.
+    report["rework_round"] = int(payload.get("rework_round") or 0)
+    report["prior_findings"] = findings
     report["inventory"] = inventory_summary
     # export_outputs wrote the report before these run-level fields existed. The
     # quality loop reads the report from disk to find the audit and source it

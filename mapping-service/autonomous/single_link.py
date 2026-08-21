@@ -36,6 +36,7 @@ class SingleLinkRunner:
         compiler: CodexOAuthCompiler | None = None,
         approved_spec: Path | None = None,
         compile_attempts: int = 5,
+        prior_findings: tuple[tuple[str, ...], ...] = (),
         ingestion_limits: IngestionLimits | None = None,
     ):
         self.store = store
@@ -51,6 +52,7 @@ class SingleLinkRunner:
         # Bounded: an unbounded retry would let the compiler search until
         # something passes, which is not the same as getting it right.
         self.compile_attempts = max(1, compile_attempts)
+        self.prior_findings = tuple(tuple(finding) for finding in prior_findings if finding)
         self.ingestion_limits = ingestion_limits or IngestionLimits()
 
     def _await_input(
@@ -229,6 +231,7 @@ class SingleLinkRunner:
                 artifacts=artifacts,
                 verifier=check,
                 max_attempts=self.compile_attempts,
+                prior_findings=self.prior_findings,
             )
             return [("compiler_artifact", path) for path in paths]
 

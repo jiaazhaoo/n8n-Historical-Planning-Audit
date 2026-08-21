@@ -62,6 +62,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=Path,
         help="Use an already-verified MappingSpec instead of compiling one. It is still verified.",
     )
+    start.add_argument(
+        "--prior-findings",
+        type=Path,
+        help=(
+            "JSON array of arrays: what a quality round found wrong with an earlier spec for this "
+            "batch. Carried into the compiler prompt from the first attempt, so a rework starts "
+            "from what the scans showed rather than rediscovering it."
+        ),
+    )
 
     continue_job = subparsers.add_parser("continue", help="Resume a single-link job from durable state.")
     continue_job.add_argument("--job-id", required=True)
@@ -126,6 +135,28 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     content_qa.add_argument("--date-field", action="append", default=[])
     content_qa.add_argument("--document-type-field", action="append", default=[])
     return parser.parse_args(argv)
+
+
+def load_prior_findings(path: Path | None) -> tuple[tuple[str, ...], ...]:
+    """Read what a quality round found wrong with an earlier spec.
+
+    A rework that starts from a blank prompt asks the compiler to rediscover
+    what the scans have already shown, and nothing stops it from proposing
+    again the spec that was just rejected.
+    """
+    if path is None:
+        return ()
+    resolved = require_unprotected_path(path, operation="read prior quality findings")
+    payload = json.loads(resolved.read_text(encoding="utf-8"))
+    if not isinstance(payload, list):
+        raise ValueError(f"--prior-findings must hold a JSON array: {resolved}")
+    findings: list[tuple[str, ...]] = []
+    for entry in payload:
+        items = entry if isinstance(entry, list) else [entry]
+        cleaned = tuple(str(item).strip() for item in items if str(item).strip())
+        if cleaned:
+            findings.append(cleaned)
+    return tuple(findings)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -270,6 +301,7 @@ def main(argv: list[str] | None = None) -> int:
                     if approved
                     else None
                 ),
+                prior_findings=load_prior_findings(getattr(args, "prior_findings", None)),
             )
             result = runner.run(job_id=job.job_id)
             print(render(store.snapshot(result.job_id)))
@@ -296,6 +328,7 @@ def main(argv: list[str] | None = None) -> int:
                     if approved
                     else None
                 ),
+                prior_findings=load_prior_findings(getattr(args, "prior_findings", None)),
             )
             result = runner.run(job_id=job.job_id)
             print(render(store.snapshot(result.job_id)))

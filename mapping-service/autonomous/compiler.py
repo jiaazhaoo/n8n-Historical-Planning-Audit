@@ -312,6 +312,7 @@ class CodexOAuthCompiler:
         artifacts: ArtifactStore,
         verifier: Callable[[MappingSpec], list[str]] | None = None,
         max_attempts: int = 1,
+        prior_findings: Sequence[Sequence[str]] = (),
     ) -> tuple[MappingSpec, tuple[Path, ...]]:
         """Compile a spec, optionally retrying against the verifier's findings.
 
@@ -322,6 +323,14 @@ class CodexOAuthCompiler:
 
         Retries are bounded. An unbounded loop would let the compiler search
         until something passes, which is a different thing from getting it right.
+
+        prior_findings carries what an earlier spec was found wrong about after
+        it had already passed verification -- a quality round comparing accepted
+        mappings against the scans themselves. Verification asks whether a
+        proposal is coherent against the evidence; a quality round asks whether
+        it was right. Only the second can see a spec that joins cleanly and
+        still matches the wrong document, so its findings belong in the prompt
+        from the first attempt rather than being rediscovered.
         """
         self._require_chatgpt_login()
         packet = compiler_packet(report)
@@ -336,7 +345,7 @@ class CodexOAuthCompiler:
             # Resuming a job that already settled on a spec.
             return load_compiled_spec(canonical_path), (packet_path, schema_path, canonical_path)
 
-        rejected: list[list[str]] = []
+        rejected: list[list[str]] = [list(finding) for finding in prior_findings if finding]
         produced: list[Path] = [packet_path, schema_path]
         last_errors: list[str] = []
         for attempt in range(1, max(1, max_attempts) + 1):
