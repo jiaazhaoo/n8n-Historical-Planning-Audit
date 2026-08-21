@@ -993,7 +993,7 @@ def run_content_qa(
         acquisition_by_id = {
             report.oachargeid: report for report in acquisition_report.case_reports
         }
-    if documents_root is None:
+    if documents_root is None and not nothing_to_verify:
         raise ContentQaError(
             "documents_root is required unless an automatic document acquirer is configured"
         )
@@ -1017,6 +1017,8 @@ def run_content_qa(
                 and acquisition.destination.is_dir()
                 else None
             )
+        elif documents_root is None:
+            directory = None
         else:
             directory = find_document_directory(expectation, documents_root)
         selected_images: tuple[Path, ...] = ()
