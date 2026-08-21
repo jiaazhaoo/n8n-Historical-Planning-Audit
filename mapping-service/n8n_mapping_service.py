@@ -580,10 +580,6 @@ def run_mapping(payload: dict[str, Any]) -> dict[str, Any]:
 
     s3_paths = [safe_data_path(value) for value in list_value(payload.get("s3_inventory_paths"))]
     portal_paths = [safe_data_path(value) for value in list_value(payload.get("portal_evidence_paths"))]
-    # Sought whether or not an S3 inventory was found. A council that holds both
-    # needs both, and the old guard stopped looking as soon as S3 answered.
-    if not portal_paths:
-        portal_paths = declared_portal_evidence(council)
     inventory_summary: dict[str, Any] = {"declared": False}
     if not s3_paths and not portal_paths:
         conventional = DATA_ROOT / council / "file-matching" / f"{council}-s3-folder-index.csv"
@@ -595,6 +591,12 @@ def run_mapping(payload: dict[str, Any]) -> dict[str, Any]:
         )
         if built is not None:
             s3_paths = [safe_data_path(str(built))]
+    # Last, and only when no scan inventory answered. Portal records are their
+    # own batch -- testvalley declares one, braintree two, torbay nothing else
+    # -- so a scan batch that found its inventory is complete, and reaching for
+    # portal evidence would blur a boundary the registry keeps on purpose.
+    if not s3_paths and not portal_paths:
+        portal_paths = declared_portal_evidence(council)
     if not s3_paths and not portal_paths:
         raise MappingServiceError(
             "No S3 inventory or Portal evidence was supplied, and this council declares neither. "

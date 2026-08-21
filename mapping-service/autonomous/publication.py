@@ -70,6 +70,34 @@ def runtime_row(mapped: dict[str, str]) -> dict[str, str]:
     }
 
 
+def resolve_paths(current: dict[str, str], replacement: dict[str, str]) -> dict[str, str]:
+    """Settle one case's path when a scan and a portal record both answer for it.
+
+    A scan wins. It is the document itself, while a portal path is a page about
+    the case, so once a case has a scan the portal adds nothing and would only
+    give the runtime two answers to choose between.
+
+    Within one mapping run this never arises -- a case takes exactly one route
+    and one route has one target -- so the two meet only here, when a portal
+    batch publishes over a case a scan batch already answered. Before this,
+    every column was overwritten wholesale, and publishing the second batch
+    erased the first batch's path.
+    """
+    settled = dict(replacement)
+    incoming_scan = (replacement.get("amazons3_path") or "").strip()
+    held_scan = (current.get("amazons3_path") or "").strip()
+    if incoming_scan:
+        settled["portal_path"] = ""
+        return settled
+    if held_scan:
+        # This batch has no scan for the case and the runtime already does.
+        settled["amazons3_path"] = held_scan
+        settled["amazons3_confidence"] = current.get("amazons3_confidence") or "0.00"
+        settled["portal_path"] = ""
+        settled["file_found"] = "yes"
+    return settled
+
+
 @dataclass(frozen=True)
 class PublicationResult:
     council: str
@@ -169,6 +197,7 @@ def publish_mapping(
             existing.append(row)
             added += 1
             continue
+        replacement = resolve_paths(current, replacement)
         if all(current.get(key, "") == value for key, value in replacement.items()):
             unchanged += 1
             continue
