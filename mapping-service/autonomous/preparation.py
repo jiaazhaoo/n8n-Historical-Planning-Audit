@@ -219,6 +219,29 @@ def chunk_rules(text: str, *, max_chars: int = 3500) -> tuple[RuleChunk, ...]:
     )
 
 
+AUTONOMOUS_BATCHES_NAME = "autonomous-batches.json"
+
+
+def autonomous_batches(council: str) -> set[str]:
+    """Batches this council allows the autonomous path to map.
+
+    `registry.PIPELINES` lists batches that have a builder script, which a
+    compiled spec never produces, so a work package mapped this way can never
+    appear there. The registry's purpose is still worth keeping -- it stops a
+    mistyped batch name from writing somewhere it should not -- so an autonomous
+    batch is declared instead of inferred.
+    """
+    path = Path("/data") / council / "file-matching" / AUTONOMOUS_BATCHES_NAME
+    if not path.is_file():
+        return set()
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise PreparationError(f"{path} is not readable JSON: {exc}") from exc
+    entries = payload.get("batches") if isinstance(payload, dict) else payload
+    return {str(entry).strip() for entry in (entries or []) if str(entry).strip()}
+
+
 def _registry_state(council: str, batch: str) -> tuple[bool, bool]:
     try:
         from registry import PIPELINES
@@ -227,7 +250,8 @@ def _registry_state(council: str, batch: str) -> tuple[bool, bool]:
     pipeline = PIPELINES.get(council)
     if pipeline is None:
         return False, False
-    return True, batch in {builder.name for builder in pipeline.builders}
+    known = {builder.name for builder in pipeline.builders} | autonomous_batches(council)
+    return True, batch in known
 
 
 def _ensure_nonempty_rows(rows: list[dict[str, str]], *, label: str) -> None:

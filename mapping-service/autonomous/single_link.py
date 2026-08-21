@@ -182,6 +182,14 @@ class SingleLinkRunner:
             execute=prepare,
         )
         preparation = PreparationReport.model_validate_json(preparation_path.read_text(encoding="utf-8"))
+        if not preparation.registry_ready:
+            # Checked before compiling: no proposal can satisfy it, so retrying
+            # against it only spends attempts on a precondition.
+            raise ValueError(
+                f"Batch {preparation.batch!r} is not registered for council "
+                f"{preparation.council!r}. Add it to /data/{preparation.council}"
+                "/file-matching/autonomous-batches.json to allow the autonomous path to map it."
+            )
 
         spec_path = artifacts.resolve("spec/mapping-spec.json")
 
