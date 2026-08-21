@@ -154,6 +154,28 @@ class Template:
         except re.error as exc:
             raise DerivationError(f"Template {self.pattern!r} is not usable: {exc}") from exc
 
+    @property
+    def prefix_is_inert(self) -> bool:
+        """True when this prefix template can never let the tail match anything.
+
+        An unqualified part with no literal after it compiles to a greedy `.+`,
+        so `_tail` only ever matches the empty string and prefix mode behaves
+        exactly like exact mode. Exeter's 1977 folders carry a free-text address
+        after the reference; `EXE_{year:d}_{reference}` derived
+        `77-799-03-2 warwick road` from the folder against `77-799-03` from the
+        source, and 859 records reported zero candidates.
+
+        Making the part non-greedy is not a fix -- `.+?` would derive `77` and
+        collide the whole year. Only the template can say where the key ends.
+        A spec that meant exact matching is not wrong here, just misdeclared,
+        so this is reported rather than refused: specs already delivered under
+        the inert spelling keep loading.
+        """
+        if self.match_mode != "prefix":
+            return False
+        final = list(PART.finditer(self.pattern))[-1]
+        return not final.group("kind") and not self.pattern[final.end():]
+
     def parse(self, text: str) -> dict[str, str] | None:
         match = getattr(self, "_regex").match((text or "").strip())
         if not match:

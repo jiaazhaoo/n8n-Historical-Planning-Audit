@@ -207,6 +207,42 @@ def derived_key_join_errors(
     return errors, warnings
 
 
+def inert_prefix_errors(spec: MappingSpec) -> list[str]:
+    """Refuse a prefix template that can never match a tail.
+
+    Declaring prefix mode and then ending the template in an untyped part makes
+    the part greedy, so the tail always matches empty and the join is exact
+    after all. Exeter's Microfiche 1977-1985 spec did this: 1978-1985 folders
+    have no trailing text so it looked correct, while all 859 records of 1977 --
+    whose folders append the site address -- reported zero candidates and the
+    run still passed at 90.1%. A join dry-run cannot catch it either, because
+    the other eight years carry the rate.
+    """
+    errors: list[str] = []
+    for route in spec.routes:
+        if route.derived_key is None:
+            continue
+        try:
+            derivation = route.derived_key.build()
+        except Exception:  # reported by the schema, not here
+            continue
+        for template in derivation.inventory_templates:
+            if not template.prefix_is_inert:
+                continue
+            errors.append(
+                f"route {route.rule_id!r} declares inventory_match_mode 'prefix' but template "
+                f"{template.pattern!r} ends in an untyped part, which matches greedily and leaves "
+                "nothing for the trailing text, so the join is exact after all. Either give the "
+                "final part a kind (:d digits, :a letters and digits) so the trailing text is "
+                "excluded from the key, or set inventory_match_mode to 'exact' if the folder name "
+                "really is the key. Where references have different shapes, list several templates "
+                "as alternatives -- 'EXE_{year:d}_{yy:d}-{number:d}-{code:a}' alongside "
+                "'EXE_{year:d}_{yy:d}-{number:d}' -- with part_defaults for the parts a shorter "
+                "alternative does not supply."
+            )
+    return errors
+
+
 def verify_mapping_spec(
     *,
     job_id: str,
@@ -223,6 +259,8 @@ def verify_mapping_spec(
     }
     cited_chunks: set[tuple[str, str, str]] = set()
     accepting_routes = 0
+
+    errors.extend(inert_prefix_errors(spec))
 
     if spec.council != preparation.council:
         errors.append(f"spec council {spec.council!r} does not equal prepared council {preparation.council!r}")
