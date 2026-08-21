@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from .engine import MappingEngineError, execute_mapping, read_csv, route_for
+import re
+
+from .engine import MappingEngineError, execute_mapping, normalize, read_csv, route_for
 from .schemas import (
     MappingSpec,
     PredicateOperator,
@@ -122,11 +124,22 @@ STRATUM_SHORTFALL = 0.25
 STRATUM_EVIDENCE_RATIO = 0.5
 
 
+def _segments(value: str) -> tuple[str, ...]:
+    """Split a reference into the parts a stratum could be drawn from.
+
+    Strata cannot come from key_parts: a route that matches on plain
+    normalizers has none, and dropping the derived key is exactly how the
+    Microfiche spec escaped this check on its third compile. The reference
+    itself carries the same structure either way -- EXE_1977_77-799-03 is the
+    council, the year, the short year, the number and the code.
+    """
+    return tuple(part for part in re.split(r"[^0-9A-Za-z]+", value) if part)
+
+
 def _stratum_findings(
     rule_id: str,
-    source_keys: list[tuple[str, ...]],
-    index: set[tuple[str, ...]],
-    key_parts: tuple[str, ...],
+    source_keys: list[tuple[object, str]],
+    index: dict[object, str],
 ) -> tuple[list[str], list[str]]:
     """Report a subpopulation that joins far below the rest of its route.
 
@@ -148,27 +161,49 @@ def _stratum_findings(
     warnings: list[str] = []
     if len(source_keys) < MIN_STRATUM_CASES or not index:
         return errors, warnings
-    overall = sum(1 for key in source_keys if key in index) / len(source_keys)
+    overall = sum(1 for key, _ in source_keys if key in index) / len(source_keys)
     if overall <= 0:
         return errors, warnings
 
-    for position, part in enumerate(key_parts):
-        if any(len(key) <= position for key in source_keys):
+    segmented = [(key, raw, _segments(raw)) for key, raw in source_keys]
+    stocked_segments = [(key, raw, _segments(raw)) for key, raw in index.items()]
+    widest = max(len(parts) for _, _, parts in segmented)
+    # A reference names the same stratum more than once -- EXE_1977_77-799-03
+    # carries the year as both 1977 and 77 -- so a stratum is suppressed when
+    # the cases it covers were already reported, not when its value repeats.
+    reported: list[frozenset[int]] = []
+
+    for position in range(widest):
+        # Named by position in the reference rather than by key_part: a route
+        # matching on plain normalizers has no parts, and even with a derived
+        # key the two do not line up -- EXE_1977_77-799-03 is five segments
+        # against a two-part key.
+        part = f"segment {position + 1}"
+        if any(len(parts) <= position for _, _, parts in segmented):
             continue
         totals: dict[str, int] = {}
         joins: dict[str, int] = {}
-        for key in source_keys:
-            value = key[position]
+        examples: dict[str, list[str]] = {}
+        members: dict[str, set[int]] = {}
+        for row, (key, raw, parts) in enumerate(segmented):
+            value = parts[position]
             totals[value] = totals.get(value, 0) + 1
+            members.setdefault(value, set()).add(row)
             if key in index:
                 joins[value] = joins.get(value, 0) + 1
+            elif len(examples.setdefault(value, [])) < 3:
+                examples[value].append(raw)
         if not 2 <= len(totals) <= MAX_STRATUM_VALUES:
             continue
 
         stocked: dict[str, int] = {}
-        for key in index:
-            if len(key) > position:
-                stocked[key[position]] = stocked.get(key[position], 0) + 1
+        stocked_examples: dict[str, list[str]] = {}
+        for _, raw, parts in stocked_segments:
+            if len(parts) > position:
+                stocked[parts[position]] = stocked.get(parts[position], 0) + 1
+                shown = stocked_examples.setdefault(parts[position], [])
+                if len(shown) < 3:
+                    shown.append(raw)
 
         for value, count in sorted(totals.items(), key=lambda item: -item[1]):
             joined = joins.get(value, 0)
@@ -177,6 +212,10 @@ def _stratum_findings(
             rate = joined / count
             if rate >= overall * STRATUM_SHORTFALL:
                 continue
+            covered = frozenset(members[value])
+            if any(covered <= already for already in reported):
+                continue
+            reported.append(covered)
             available = stocked.get(value, 0)
             if available < count * STRATUM_EVIDENCE_RATIO:
                 warnings.append(
@@ -189,10 +228,12 @@ def _stratum_findings(
                 f"route {rule_id}: cases with {part}={value!r} join {joined}/{count} ({rate:.1%}) "
                 f"while the route joins {overall:.1%} overall, and the inventory holds {available} "
                 f"keys for {part}={value!r}. Those scans exist and the derivation is not reaching "
-                f"them, so {part}={value!r} is written differently on the two sides. Read real key "
-                "values from both sides for that stratum and add the template alternative it needs. "
-                "Do not widen key_parts to absorb the difference: a part the source leaves at its "
-                "default can never equal one the inventory fills in."
+                f"them, so {part}={value!r} is written differently on the two sides. Unjoined source "
+                f"values: {examples.get(value, [])}. Inventory keys in the same stratum: "
+                f"{stocked_examples.get(value, [])}. Give the route a derived_key whose templates "
+                "cover both shapes, or add the alternative the existing one is missing. Do not "
+                "widen key_parts to absorb the difference: a part the source leaves at its default "
+                "can never equal one the inventory fills in."
             )
     return errors, warnings
 
@@ -211,11 +252,11 @@ def derived_key_join_errors(
     """
     errors: list[str] = []
     warnings: list[str] = []
-    routes = [
-        route
-        for route in spec.routes
-        if route.target != RouteTarget.REJECT and route.derived_key is not None
-    ]
+    # Routes without a derived key join by normalized equality. They fail the
+    # same way -- Exeter Microfiche dropped its derived key on the third compile
+    # and the whole of 1977 went unmatched again, unseen -- so they are checked
+    # on the same terms.
+    routes = [route for route in spec.routes if route.target != RouteTarget.REJECT]
     if not routes:
         return errors, warnings
 
@@ -236,39 +277,54 @@ def derived_key_join_errors(
     # Routes that declare the same derivation over the same column produce the
     # same index; building it once per distinct derivation keeps a large
     # inventory from being walked once per route.
-    indexes: dict[str, set[tuple[str, ...]]] = {}
+    indexes: dict[str, dict[tuple[str, ...], str]] = {}
 
     for route in routes:
-        derivation = route.derived_key.build()
+        derivation = route.derived_key.build() if route.derived_key else None
         key_field = route.inventory_key_field or spec.inventory_key_field
-        signature = f"{key_field}\0{route.derived_key.model_dump_json()}"
+        if derivation is not None:
+            recipe = route.derived_key.model_dump_json()
+            def inventory_key(raw: str, _d=derivation) -> object | None:
+                return _d.inventory_key(raw)
+
+            def source_key(raw: str, _d=derivation) -> object | None:
+                return _d.source_key(raw)
+        else:
+            recipe = "normalizers:" + ",".join(route.normalizers)
+
+            def inventory_key(raw: str, _n=tuple(route.normalizers)) -> object | None:
+                return normalize(raw, _n) or None
+
+            source_key = inventory_key
+        signature = f"{key_field}\0{recipe}"
         index = indexes.get(signature)
         if index is None:
-            index = set()
+            index = {}
             for candidate in inventory_rows:
-                key = derivation.inventory_key(str(candidate.get(key_field) or ""))
+                raw = str(candidate.get(key_field) or "")
+                key = inventory_key(raw)
                 if key is not None:
-                    index.add(key)
+                    index.setdefault(key, raw)
             indexes[signature] = index
 
         selected = rows_by_rule.get(route.rule_id, [])
         joined = 0
         keyed = 0
-        source_keys: list[tuple[str, ...]] = []
+        source_keys: list[tuple[tuple[str, ...], str]] = []
         for row in selected:
             value = str(row.get(route.authoritative_key) or "").strip()
             if not value and route.fallback_key:
                 value = str(row.get(route.fallback_key) or "").strip()
-            key = derivation.source_key(value) if value else None
+            key = source_key(value) if value else None
             if key is None:
                 continue
             keyed += 1
-            source_keys.append(key)
+            source_keys.append((key, value))
             if key in index:
                 joined += 1
 
         stratum_errors, stratum_warnings = _stratum_findings(
-            route.rule_id, source_keys, index, derivation.key_parts
+            route.rule_id, source_keys, index
         )
         errors.extend(stratum_errors)
         warnings.extend(stratum_warnings)
@@ -278,7 +334,7 @@ def derived_key_join_errors(
             f"route {route.rule_id}: derived key joins {joined}/{len(selected)} routed cases "
             f"({rate:.1%}); {keyed} produced a key and the inventory yielded {len(index)} distinct keys"
         )
-        if not index and len(inventory_rows) >= 20:
+        if derivation is not None and not index and len(inventory_rows) >= 20:
             # No inventory row keyed at all. That is never a property of the
             # data; the inventory side of the derivation is simply wrong.
             sample = str(inventory_rows[0].get(key_field) or "")
@@ -286,7 +342,7 @@ def derived_key_join_errors(
                 f"route {route.rule_id}: the derived key produces no key for any of "
                 f"{len(inventory_rows)} inventory rows. {derivation.explain(sample, side='inventory')}"
             )
-        elif joined == 0 and len(selected) >= 20 and len(index) >= 20:
+        elif derivation is not None and joined == 0 and len(selected) >= 20 and len(index) >= 20:
             errors.append(
                 f"route {route.rule_id}: the derived key joins none of {len(selected)} routed cases "
                 f"against {len(index)} inventory keys. Check that every part in key_parts means the "
