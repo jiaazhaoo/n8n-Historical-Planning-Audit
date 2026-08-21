@@ -423,12 +423,28 @@ def derived_key_join_errors(
                 f"route {route.rule_id}: the derived key produces no key for any of "
                 f"{len(inventory_rows)} inventory rows. {derivation.explain(sample, side='inventory')}"
             )
-        elif derivation is not None and joined == 0 and len(selected) >= 20 and len(index) >= 20:
+        elif joined == 0 and len(selected) >= 20 and len(index) >= 20:
+            # Not restricted to derived keys. Mansfield keyed a plain route on
+            # supplementary-information -- the charge description, matched
+            # against folder names -- and joined 0 of 18,086 while every check
+            # stayed silent, because this one asked whether a derived key was
+            # present before asking whether anything matched.
+            how = (
+                "the derived key joins"
+                if derivation is not None
+                else f"matching {route.authoritative_key!r} against {key_field!r} joins"
+            )
+            advice = (
+                "Check that every part in key_parts means the same thing on both sides; a folder's "
+                "trailing code is usually a document type, not the reference's application-type suffix."
+                if derivation is not None
+                else "Route on the field that identifies the case, and where it is spelled "
+                "differently from the inventory key, set a derived_key rather than relying on "
+                "normalizers to close the gap."
+            )
             errors.append(
-                f"route {route.rule_id}: the derived key joins none of {len(selected)} routed cases "
-                f"against {len(index)} inventory keys. Check that every part in key_parts means the "
-                "same thing on both sides; a folder's trailing code is usually a document type, not "
-                "the reference's application-type suffix."
+                f"route {route.rule_id}: {how} none of {len(selected)} routed cases against "
+                f"{len(index)} inventory keys. {advice}"
             )
     return errors, warnings
 
