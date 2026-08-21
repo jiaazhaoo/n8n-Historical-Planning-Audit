@@ -970,6 +970,20 @@ def run_content_qa(
         "qa/source-expectations.json",
         [expectation.model_dump(mode="json") for expectation in expectations],
     )
+    # Nothing in the source to compare a scan against means the verdict is
+    # settled before the scan is fetched. Exeter's Microfiche 1977-1985 table
+    # fills only the charge identifier, and 388 scans were downloaded to reach
+    # rule_supported_unverified on every one of them. Acquisition is skipped in
+    # that case; the verdict below is the same one the judge would return, so
+    # the gate reads "the source states no address or description" rather than
+    # the misleading "acquisition produced no document set".
+    nothing_to_verify = not any(
+        expectation.address_values or expectation.description_values or expectation.date_values
+        for expectation in expectations
+    )
+    if nothing_to_verify:
+        acquirer = None
+
     acquisition_report: AcquisitionBatchReport | None = None
     acquisition_by_id = {}
     documents_root = config.documents_root
@@ -1019,6 +1033,18 @@ def run_content_qa(
                     unreadable_image_names=(),
                     warnings=(),
                 ),
+            )
+        elif nothing_to_verify:
+            # Judged on the source alone: with no address, description or date
+            # recorded, no document could confirm or contradict the match.
+            verdict = QaVerdict.RULE_SUPPORTED_UNVERIFIED
+            confidence = 0.0
+            eligible = False
+            signals = {"reference": False, "address": False, "description": False, "date": False}
+            matched_index = None
+            reason = (
+                "The source record states no address or description, so its document cannot be "
+                "checked against it"
             )
         elif directory is None:
             verdict = QaVerdict.MISSING_DOCUMENT
