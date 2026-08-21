@@ -23,6 +23,24 @@
         ]
       ]
     },
+    "Cleared by holdout": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Publish into the council table",
+            "type": "main"
+          }
+        ],
+        [
+          {
+            "index": 0,
+            "node": "Holdout gate failed",
+            "type": "main"
+          }
+        ]
+      ]
+    },
     "Compile rules and map every case": {
       "main": [
         [
@@ -97,6 +115,28 @@
           {
             "index": 0,
             "node": "Quality round on working pool",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Publication decision": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Cleared by holdout",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Publish into the council table": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Published",
             "type": "main"
           }
         ]
@@ -344,7 +384,7 @@
       "id": "publish-decision",
       "name": "Publication decision",
       "parameters": {
-        "jsCode": "const acceptance = $json;\nconst mapping = $('Mapping outputs').first().json;\nconst passed = acceptance.passed === true;\n// The holdout is the only sample the spec was never tuned against, so it is the\n// only one that may authorise publication.\nreturn [{json:{\n  status: passed ? 'accepted_on_holdout' : 'holdout_gate_failed',\n  production_published: false,\n  cleared_for_publication: passed,\n  council: mapping.council,\n  batch: mapping.batch,\n  case_count: mapping.case_count,\n  outputs: mapping.outputs,\n  acceptance_metrics: acceptance.metrics,\n  acceptance_reasons: acceptance.reasons || [],\n  sampling_plan: acceptance.sampling_plan,\n  budget: acceptance.budget,\n  model: acceptance.model,\n  quality_report: acceptance.quality_report,\n}}];"
+        "jsCode": "const acceptance = $json;\nconst mapping = $('Mapping outputs').first().json;\nconst passed = acceptance.passed === true;\n// The holdout is the only sample the spec was never tuned against, so it is the\n// only one that may authorise publication.\nreturn [{json:{\n  status: passed ? 'accepted_on_holdout' : 'holdout_gate_failed',\n  production_published: false,\n  cleared_for_publication: passed,\n  council: mapping.council,\n  batch: mapping.batch,\n  case_count: mapping.case_count,\n  outputs: mapping.outputs,\n  // Publication reads this run's own acceptance evidence from here, so the\n  // directory travels with the decision rather than being rebuilt downstream.\n  run_directory: mapping.quality_request.run_directory,\n  acceptance_metrics: acceptance.metrics,\n  acceptance_reasons: acceptance.reasons || [],\n  sampling_plan: acceptance.sampling_plan,\n  budget: acceptance.budget,\n  model: acceptance.model,\n  quality_report: acceptance.quality_report,\n}}];"
       },
       "position": [
         1392,
@@ -655,6 +695,87 @@
       "position": [
         1544,
         448
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "cleared-if",
+      "name": "Cleared by holdout",
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "is-cleared",
+              "leftValue": "={{ $json.cleared_for_publication }}",
+              "operator": {
+                "operation": "true",
+                "singleValue": true,
+                "type": "boolean"
+              },
+              "rightValue": "true"
+            }
+          ],
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          }
+        },
+        "options": {}
+      },
+      "position": [
+        1612,
+        -160
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2
+    },
+    {
+      "id": "publish-http",
+      "name": "Publish into the council table",
+      "parameters": {
+        "body": "={{ JSON.stringify({council: $json.council, batch: $json.batch, run_directory: $json.run_directory, dry_run: false}) }}",
+        "contentType": "raw",
+        "method": "POST",
+        "options": {
+          "timeout": 600000
+        },
+        "rawContentType": "application/json",
+        "sendBody": true,
+        "url": "http://host.docker.internal:5680/publish"
+      },
+      "position": [
+        1832,
+        -220
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "published",
+      "name": "Published",
+      "parameters": {
+        "jsCode": "// The end of the chain. Publication merges this run into the council's own\n// matching table on its holdout evidence, and nothing else here may write there.\nconst p = $json;\nconst decision = $('Publication decision').first().json;\nreturn [{json:{\n  status: p.production_published ? 'published' : 'publication_refused',\n  production_published: p.production_published === true,\n  council: decision.council,\n  batch: decision.batch,\n  runtime_path: p.runtime_path,\n  backup_path: p.backup_path,\n  rows_total: p.rows_total,\n  rows_updated: p.rows_updated,\n  rows_unchanged: p.rows_unchanged,\n  rows_added: p.rows_added,\n  verified_rate: p.verified_rate,\n  acceptance_metrics: decision.acceptance_metrics,\n  quality_report: decision.quality_report,\n}}];"
+      },
+      "position": [
+        2052,
+        -220
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "holdout-failed",
+      "name": "Holdout gate failed",
+      "parameters": {
+        "jsCode": "// The holdout is the only sample the spec was never tuned against, so a run it\n// does not clear is not published, whatever the working rounds said.\nconst j = $json;\nreturn [{json:{\n  status: 'holdout_gate_failed',\n  production_published: false,\n  council: j.council,\n  batch: j.batch,\n  acceptance_metrics: j.acceptance_metrics,\n  acceptance_reasons: j.acceptance_reasons || [],\n  quality_report: j.quality_report,\n}}];"
+      },
+      "position": [
+        1832,
+        -40
       ],
       "type": "n8n-nodes-base.code",
       "typeVersion": 2
