@@ -69,6 +69,55 @@ def load_compiled_spec(path: Path) -> MappingSpec:
         raise CompilerError(f"Codex output is not a valid MappingSpec: {exc}") from exc
 
 
+APPROVED_SPECS_DIRNAME = "approved-specs"
+
+
+def accepted_precedents(council: str, *, exclude_batch: str = "") -> list[dict[str, Any]]:
+    """How this council's already-accepted specs spelled their joins.
+
+    Every compile starts from nothing today, so each new work package
+    rediscovers the council's own conventions. Exeter's Microfiche batch spent
+    three attempts arriving at a folder shape that the accepted WP3 spec
+    already recorded.
+
+    Read from approved-specs rather than from any run that happened to pass
+    verification. That directory holds only specs someone accepted after a
+    holdout round, so a precedent is something that was measured to be right,
+    not merely something that parsed.
+    """
+    directory = Path("/data") / council / "file-matching" / APPROVED_SPECS_DIRNAME
+    if not directory.is_dir():
+        return []
+    precedents: list[dict[str, Any]] = []
+    for path in sorted(directory.glob("*.json")):
+        if exclude_batch and path.stem == exclude_batch:
+            continue
+        try:
+            spec = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        joins: list[dict[str, Any]] = []
+        for route in spec.get("routes", []):
+            derived = route.get("derived_key")
+            if not derived:
+                continue
+            joins.append(
+                {
+                    "authoritative_key": route.get("authoritative_key"),
+                    "inventory_key_field": route.get("inventory_key_field")
+                    or spec.get("inventory_key_field"),
+                    "source_templates": derived.get("source_templates"),
+                    "inventory_templates": derived.get("inventory_templates"),
+                    "inventory_match_mode": derived.get("inventory_match_mode"),
+                    "key_parts": derived.get("key_parts"),
+                    "part_normalizers": derived.get("part_normalizers"),
+                }
+            )
+        if joins:
+            precedents.append({"batch": spec.get("batch") or path.stem, "joins": joins})
+    return precedents
+
+
 def compiler_packet(report: PreparationReport) -> dict[str, Any]:
     return {
         "schema_version": 1,
@@ -90,6 +139,9 @@ def compiler_packet(report: PreparationReport) -> dict[str, Any]:
             "value_counts": value_distributions(report.inventory_path),
         },
         "capture_rule_chunks": [chunk.model_dump(mode="json") for chunk in report.capture_rule_chunks],
+        # Specs already accepted for this council, so a new work package starts
+        # from its conventions instead of rediscovering them.
+        "accepted_precedents": accepted_precedents(report.council, exclude_batch=report.batch),
         "hard_constraints": {
             "no_path_construction": True,
             "accept_only_unique_inventory_candidate": True,
@@ -101,22 +153,36 @@ def compiler_packet(report: PreparationReport) -> dict[str, Any]:
     }
 
 
-def rejection_notes(attempts: Sequence[Sequence[str]]) -> str:
-    """Show the verifier's own words back to the compiler, newest last."""
+def rejection_notes(attempts: Sequence[Sequence[str]], *, from_quality: int = 0) -> str:
+    """Show the findings back to the compiler in their own words, newest last.
+
+    Quality-round findings are labelled apart from verifier findings because
+    they answer different questions. The verifier asks whether a proposal is
+    coherent against the evidence; a quality round compared accepted mappings
+    against the scans and asks whether it was right. A spec can satisfy the
+    first completely and still match the wrong document.
+    """
     if not attempts:
         return ""
     blocks = []
     for index, errors in enumerate(attempts, start=1):
         listed = "\n".join(f"  - {error}" for error in errors)
-        blocks.append(f"Attempt {index} was rejected by the independent verifier:\n{listed}")
+        if index <= from_quality:
+            blocks.append(
+                f"An earlier spec passed verification and was then found wrong by a quality round "
+                f"that compared its accepted mappings against the scans themselves ({index}):\n{listed}"
+            )
+        else:
+            blocks.append(
+                f"Attempt {index - from_quality} was rejected by the independent verifier:\n{listed}"
+            )
     joined = "\n\n".join(blocks)
     return f"""
 PREVIOUS ATTEMPTS
 {joined}
 
-Those errors are measured against the real evidence in the packet, not style opinions. Fix the named
-cause rather than rewriting the whole spec, and do not repeat a spelling the verifier has already
-rejected.
+Those findings are measured against the real evidence, not style opinions. Fix the named cause rather
+than rewriting the whole spec, and do not repeat a spelling that has already been rejected.
 END PREVIOUS ATTEMPTS
 """
 
@@ -125,9 +191,10 @@ def compiler_prompt(
     packet_path: Path,
     packet: dict[str, Any] | None = None,
     rejected: Sequence[Sequence[str]] = (),
+    from_quality: int = 0,
 ) -> str:
     embedded_packet = json.dumps(packet, ensure_ascii=False, indent=2) if packet is not None else ""
-    previous = rejection_notes(rejected)
+    previous = rejection_notes(rejected, from_quality=from_quality)
     return f"""You are a capture-rules compiler for council planning-record mapping.
 
 The compiler packet is embedded below and is also frozen at {packet_path}. Do not call tools or
@@ -148,6 +215,11 @@ Non-negotiable rules:
 - Routes are evaluated from the lowest priority number upwards, and the first match wins. Give accepting
   routes low numbers and put any catch-all reject route at the highest number, or the reject shadows
   everything and the mapping accepts nothing.
+- accepted_precedents holds joins from specs already accepted for this council after a holdout
+  round. A council names its folders one way across work packages, so start from a precedent's
+  template shapes, normalizers and key_parts and adapt them to this packet's real values. They are
+  evidence about the council, not about this batch: never cite one in place of a capture rule, and
+  drop a precedent that does not parse the values you can see in the packet.
 - Use only source and inventory field names listed in the packet.
 - Translate capture-rule prose into ordered route predicates. Do not invent S3 paths or Portal URLs.
 - S3 and Portal candidates must come from exact inventory rows through inventory key/path fields.
@@ -237,6 +309,7 @@ class CodexOAuthCompiler:
         schema_path: Path,
         artifacts: ArtifactStore,
         rejected: list[list[str]],
+        from_quality: int = 0,
     ) -> tuple[MappingSpec, Path, Path]:
         """Run one compilation and return its spec, raw output and log."""
         root = f"compiler/attempt-{attempt:02d}"
@@ -270,7 +343,7 @@ class CodexOAuthCompiler:
         result = self.command_runner(
             self.command_isolator(command),
             env=self._oauth_environment(),
-            input=compiler_prompt(packet_path, packet, rejected),
+            input=compiler_prompt(packet_path, packet, rejected, from_quality=from_quality),
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -345,7 +418,8 @@ class CodexOAuthCompiler:
             # Resuming a job that already settled on a spec.
             return load_compiled_spec(canonical_path), (packet_path, schema_path, canonical_path)
 
-        rejected: list[list[str]] = [list(finding) for finding in prior_findings if finding]
+        seeded = [list(finding) for finding in prior_findings if finding]
+        rejected: list[list[str]] = list(seeded)
         produced: list[Path] = [packet_path, schema_path]
         last_errors: list[str] = []
         for attempt in range(1, max(1, max_attempts) + 1):
@@ -357,6 +431,7 @@ class CodexOAuthCompiler:
                     schema_path=schema_path,
                     artifacts=artifacts,
                     rejected=rejected,
+                    from_quality=len(seeded),
                 )
             except CompilerError as exc:
                 # A proposal that will not even parse is the kind of mistake
