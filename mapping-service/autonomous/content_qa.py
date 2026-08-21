@@ -911,8 +911,17 @@ def run_content_qa(
     pipeline = PIPELINES.get(config.council)
     if pipeline is None:
         raise ContentQaError(f"Council {config.council!r} is not registered")
-    if config.batch not in {builder.name for builder in pipeline.builders}:
-        raise ContentQaError(f"Batch {config.batch!r} is not registered for council {config.council!r}")
+    # The same admission rule as the mapping path: a batch mapped by a compiled
+    # spec has no builder and can only be known from its declaration.
+    from .preparation import autonomous_batches
+
+    known = {builder.name for builder in pipeline.builders} | autonomous_batches(config.council)
+    if config.batch not in known:
+        raise ContentQaError(
+            f"Batch {config.batch!r} is not registered for council {config.council!r}. Add it to "
+            f"/data/{config.council}/file-matching/autonomous-batches.json to allow the autonomous "
+            "path to check it."
+        )
     source_rows = load_tabular(config.source_path, original_name=config.source_original_name)
     if not source_rows:
         raise ContentQaError("Source evidence contains no rows")
