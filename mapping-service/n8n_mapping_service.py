@@ -492,6 +492,67 @@ def prior_findings_value(value: Any) -> list[list[str]]:
     return findings
 
 
+PORTAL_EVIDENCE_NAME = "portal-evidence.json"
+PORTAL_URL = re.compile(r"https?://[^\s\]<>\"']{6,200}")
+PORTAL_WORDS = re.compile(r"public access|planning portal|online-applications", re.I)
+
+
+def portal_named_in_rules(rule_paths: Iterable[Path]) -> str | None:
+    """The portal a council's capture rules point at, if they point at one.
+
+    The rules name it: Test Valley's say the Public Access Planning Portal at
+    view-applications.testvalley.gov.uk covers 2005 onward. What they cannot say
+    is which case is which document -- that only a search of the portal
+    establishes, and path construction is forbidden -- so naming it is how a run
+    reports that the evidence it would need was never supplied.
+    """
+    for path in rule_paths:
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for match in PORTAL_URL.finditer(text):
+            url = match.group(0).rstrip(".,;")
+            window = text[max(0, match.start() - 300) : match.end() + 120]
+            if PORTAL_WORDS.search(window) or PORTAL_WORDS.search(url):
+                return url
+    return None
+
+
+def declared_portal_evidence(council: str) -> list[Path]:
+    """Portal evidence this council has declared, the way S3 trees are declared.
+
+    An S3 inventory is found three ways -- passed in, at a conventional name, or
+    built from inventory-sources.json -- and portal evidence only one, by hand.
+    Test Valley wp2 lost 17 of its 30 cases to that: the compiler read the rules
+    correctly, split the batch at 2004, and routed the later records to a reject
+    named reject_portal_period_without_portal_inventory. Nobody was going to
+    read a route name.
+    """
+    declaration = DATA_ROOT / council / "file-matching" / PORTAL_EVIDENCE_NAME
+    if not declaration.is_file():
+        return []
+    try:
+        payload = json.loads(declaration.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise MappingServiceError(f"{declaration} is not readable JSON: {exc}") from exc
+    entries = payload.get("evidence") if isinstance(payload, dict) else payload
+    paths: list[Path] = []
+    for entry in entries or []:
+        value = str(entry).strip()
+        if not value:
+            continue
+        candidate = Path(value)
+        if not candidate.is_absolute():
+            candidate = DATA_ROOT / council / "file-matching" / value
+        if not candidate.is_file():
+            raise MappingServiceError(
+                f"{declaration} names portal evidence that does not exist: {candidate}"
+            )
+        paths.append(safe_data_path(str(candidate)))
+    return paths
+
+
 def run_mapping(payload: dict[str, Any]) -> dict[str, Any]:
     council = slug(str(payload.get("council") or ""), label="council")
     batch = str(payload.get("batch") or "").strip()
@@ -519,6 +580,10 @@ def run_mapping(payload: dict[str, Any]) -> dict[str, Any]:
 
     s3_paths = [safe_data_path(value) for value in list_value(payload.get("s3_inventory_paths"))]
     portal_paths = [safe_data_path(value) for value in list_value(payload.get("portal_evidence_paths"))]
+    # Sought whether or not an S3 inventory was found. A council that holds both
+    # needs both, and the old guard stopped looking as soon as S3 answered.
+    if not portal_paths:
+        portal_paths = declared_portal_evidence(council)
     inventory_summary: dict[str, Any] = {"declared": False}
     if not s3_paths and not portal_paths:
         conventional = DATA_ROOT / council / "file-matching" / f"{council}-s3-folder-index.csv"
@@ -532,9 +597,10 @@ def run_mapping(payload: dict[str, Any]) -> dict[str, Any]:
             s3_paths = [safe_data_path(str(built))]
     if not s3_paths and not portal_paths:
         raise MappingServiceError(
-            "No S3 inventory or Portal evidence was supplied, and this council declares no "
-            f"inventory sources. Create {DATA_ROOT / council / 'file-matching' / INVENTORY_SOURCES_NAME} "
-            "or pass s3_inventory_paths."
+            "No S3 inventory or Portal evidence was supplied, and this council declares neither. "
+            f"Create {DATA_ROOT / council / 'file-matching' / INVENTORY_SOURCES_NAME} for scans, "
+            f"{DATA_ROOT / council / 'file-matching' / PORTAL_EVIDENCE_NAME} for portal records, "
+            "or pass the paths explicitly."
         )
 
     stamp = utc_stamp()
@@ -662,6 +728,29 @@ def run_mapping(payload: dict[str, Any]) -> dict[str, Any]:
     report["rework_round"] = int(payload.get("rework_round") or 0)
     report["prior_findings"] = findings
     report["inventory"] = inventory_summary
+    # A batch that needs the portal and was not given it rejects those rows
+    # through a capture rule, which reads like a decision rather than a missing
+    # input. Test Valley wp2 lost 17 of its 30 cases that way without anything
+    # in the result saying so.
+    report["missing_evidence"] = []
+    if not portal_paths:
+        portal = portal_named_in_rules(rule_paths)
+        rejected = int((report.get("match_status_counts") or {}).get("no_match", 0))
+        if portal and rejected:
+            report["missing_evidence"].append(
+                {
+                    "kind": "portal",
+                    "named_in_capture_rules": portal,
+                    "unrouted_cases": rejected,
+                    "detail": (
+                        f"The capture rules name a planning portal at {portal}, no portal evidence "
+                        f"was supplied, and {rejected} case(s) reached no accepting route. Portal "
+                        "paths cannot be constructed from a reference, so the portal has to be "
+                        "searched and its results supplied as evidence -- pass "
+                        f"portal_evidence_paths, or declare them in {DATA_ROOT / council / 'file-matching' / PORTAL_EVIDENCE_NAME}."
+                    ),
+                }
+            )
     # export_outputs wrote the report before these run-level fields existed. The
     # quality loop reads the report from disk to find the audit and source it
     # must review, so the file has to carry what the response carries.
