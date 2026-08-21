@@ -640,6 +640,48 @@ def canonical_reference_key(value: str, council: str) -> str:
     return reference_key(value)
 
 
+def reference_search_patterns(value: str) -> tuple[str, ...]:
+    """How a reference is written on the document it belongs to.
+
+    A source row joins the parts one way and the document another -- Exeter
+    records EXE_1979_79-854-03 while its scan says 79/854 -- so what has to be
+    reconstructed is the two-digit year and the number that follows it, with any
+    of the usual separators and any leading zeros between the two spellings.
+
+    One pattern, not every adjacent pair of number groups. Both rules scored
+    12/12 on the sample's own references and 0/132 against the other cases', so
+    the measurement could not separate them; the narrower rule wins on the
+    asymmetry instead. A case that cannot be verified only fails to count as
+    verified, while a case verified against a coincidental number match is a
+    silent error, and each extra pattern is only more surface for one.
+    """
+    groups = re.findall(r"\d+", value or "")
+    if not groups:
+        return ()
+    index: int | None = None
+    year = next((group for group in groups if len(group) == 4), None)
+    if year is not None:
+        short = year[2:]
+        after = groups.index(year)
+        index = next(
+            (position for position, group in enumerate(groups) if group == short and position > after),
+            None,
+        )
+    if index is None:
+        index = next((position for position, group in enumerate(groups) if len(group) == 2), None)
+    if index is None or index + 1 >= len(groups):
+        return ()
+    return (rf"\b{re.escape(groups[index])}\s*[/\-.]\s*0*{int(groups[index + 1])}\b",)
+
+
+def document_carries_reference(text: str, expectation: "ContentExpectation") -> bool:
+    for value in expectation.reference_values:
+        for pattern in reference_search_patterns(value):
+            if re.search(pattern, text):
+                return True
+    return False
+
+
 ADDRESS_STOPWORDS = {
     "the", "and", "of", "at", "land", "site", "property", "sheffield", "road", "street",
     "avenue", "lane", "drive", "close", "way", "uk",
@@ -828,6 +870,26 @@ def judge_observation(
             None,
             "Observed reference and application-site address both conflict with the source record",
         )
+    # Where the source records nothing but a reference, there is no second fact
+    # to corroborate with, and demanding one makes the batch permanently
+    # unverifiable. On Exeter's Microfiche 1977-1985 sample the reference alone
+    # separates the cases cleanly: every one of the twelve scans carried its own
+    # reference, and none carried any of the other eleven (0/132).
+    if combined["reference"] and not (
+        expectation.address_values or expectation.description_values or expectation.date_values
+    ):
+        return (
+            QaVerdict.VERIFIED_REFERENCE_ONLY,
+            0.80,
+            True,
+            combined,
+            next(
+                (index for index, signals in enumerate(identity_signals) if signals["reference"]),
+                None,
+            ),
+            "The document carries the expected reference; the source records no address, "
+            "description or date to corroborate it against",
+        )
     if len(set(observed_refs)) > 1 and not combined["reference"]:
         return (
             QaVerdict.AMBIGUOUS,
@@ -978,7 +1040,10 @@ def run_content_qa(
     # the gate reads "the source states no address or description" rather than
     # the misleading "acquisition produced no document set".
     nothing_to_verify = not any(
-        expectation.address_values or expectation.description_values or expectation.date_values
+        expectation.address_values
+        or expectation.description_values
+        or expectation.date_values
+        or expectation.reference_values
         for expectation in expectations
     )
     if nothing_to_verify:
@@ -1132,7 +1197,8 @@ def run_content_qa(
     accepted_ids = {expectation.oachargeid for expectation in expectations if expectation.accepted}
     accepted_results = [result for result in results if result.oachargeid in accepted_ids]
     sample_passed = bool(accepted_results) and all(
-        result.verdict == QaVerdict.VERIFIED_SAME for result in accepted_results
+        result.verdict in {QaVerdict.VERIFIED_SAME, QaVerdict.VERIFIED_REFERENCE_ONLY}
+        for result in accepted_results
     )
     failure_signatures: dict[tuple[str, str], int] = defaultdict(int)
     for result in results:

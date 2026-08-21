@@ -494,6 +494,10 @@ class HistoricalReplayReport(StrictModel):
 
 class QaVerdict(str, Enum):
     VERIFIED_SAME = "verified_same"
+    # Kept distinct from VERIFIED_SAME so a report never implies an address was
+    # compared when the source held none. Only reachable where the source row
+    # carries nothing but its reference.
+    VERIFIED_REFERENCE_ONLY = "verified_reference_only"
     VERIFIED_WRONG = "verified_wrong"
     RULE_SUPPORTED_UNVERIFIED = "rule_supported_unverified"
     AMBIGUOUS = "ambiguous"

@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Sequence
 
-from .content_qa import ContentQaError, address_matches
+from .content_qa import ContentQaError, address_matches, document_carries_reference
 from .local_verifier import MIN_TEXT_CHARACTERS, NO_SIGNALS, _usable
 from .openrouter_vision import OpenRouterError, OpenRouterSettings, OpenRouterVisionExtractor
 from .paddle_ocr import PaddleOcrError, PaddleOcrRunner
@@ -165,12 +165,27 @@ class LlmJudgeVerifier:
         swapped: str | None = None
 
         if not _usable(expectation.address_values) and not _usable(expectation.description_values):
-            verdict, confidence, reason = (
-                QaVerdict.RULE_SUPPORTED_UNVERIFIED,
-                0.0,
-                "The source record states no address or description, so its document cannot be "
-                "checked against it",
-            )
+            # No address to compare does not mean nothing can be checked. The
+            # reference is still a fact about the case, and whether the scan
+            # filed under that folder carries it is exactly the question --
+            # a mislabelled folder or a wrong pick among candidates both show
+            # up as the wrong reference. Answered from the OCR text already in
+            # hand, so it costs nothing and asks the model nothing.
+            if document_carries_reference(text, expectation):
+                signals["reference"] = True
+                verdict, confidence, reason = (
+                    QaVerdict.VERIFIED_REFERENCE_ONLY,
+                    0.80,
+                    "The document carries the expected reference; the source records no address "
+                    "or description to corroborate it against",
+                )
+            else:
+                verdict, confidence, reason = (
+                    QaVerdict.RULE_SUPPORTED_UNVERIFIED,
+                    0.0,
+                    "The source records no address or description, and the document does not "
+                    f"carry the expected reference {list(expectation.reference_values)[:2]}",
+                )
         elif len(text) < MIN_TEXT_CHARACTERS:
             verdict, confidence, reason = (
                 QaVerdict.UNREADABLE,
@@ -245,4 +260,5 @@ class LlmJudgeVerifier:
                 "pages": len(pages),
             },
         )
-        return verdict, confidence, verdict == QaVerdict.VERIFIED_SAME, signals, None, reason, evidence_path
+        eligible = verdict in {QaVerdict.VERIFIED_SAME, QaVerdict.VERIFIED_REFERENCE_ONLY}
+        return verdict, confidence, eligible, signals, None, reason, evidence_path

@@ -15,6 +15,10 @@ from typing import Any, Iterable, Sequence
 
 
 VERIFIED_SAME = "verified_same"
+# Where the source records only a reference, a document carrying that reference
+# is the strongest evidence available, so it counts as verified -- reported
+# under its own name so nobody reads it as an address having been compared.
+VERIFIED_REFERENCE_ONLY = "verified_reference_only"
 VERIFIED_WRONG = "verified_wrong"
 MISSING_DOCUMENT = "missing_document"
 UNREADABLE = "unreadable"
@@ -231,7 +235,7 @@ def evaluate_gate(
     # they are outside the population this gate is measuring.
     judged = [result for result in results if _verdict(result) != NOT_APPLICABLE]
     judged_total = len(judged)
-    verified_same = counts[VERIFIED_SAME]
+    verified_same = counts[VERIFIED_SAME] + counts[VERIFIED_REFERENCE_ONLY]
     verified_wrong = counts[VERIFIED_WRONG]
     missing = counts[MISSING_DOCUMENT]
 

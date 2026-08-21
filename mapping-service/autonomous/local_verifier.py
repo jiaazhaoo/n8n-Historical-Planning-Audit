@@ -33,6 +33,7 @@ from .content_qa import (
     canonical_reference_key,
     date_keys,
     description_matches,
+    document_carries_reference,
     word_tokens,
 )
 from .paddle_ocr import PaddleOcrError, PaddleOcrRunner
@@ -188,12 +189,24 @@ class OcrTextVerifier:
         swapped = self._swapped_with(expectation, text) if text else None
 
         if not _usable(expectation.address_values) and not _usable(expectation.description_values):
-            verdict, confidence, reason = (
-                QaVerdict.RULE_SUPPORTED_UNVERIFIED,
-                0.0,
-                "The source record states no address or description, so its document cannot be "
-                "checked against it",
-            )
+            # Same reasoning as the judge: with no address recorded, whether the
+            # scan filed under this folder carries the case reference is the
+            # only question left, and it is a real one.
+            if document_carries_reference(text, expectation):
+                signals["reference"] = True
+                verdict, confidence, reason = (
+                    QaVerdict.VERIFIED_REFERENCE_ONLY,
+                    0.80,
+                    "The document carries the expected reference; the source records no address "
+                    "or description to corroborate it against",
+                )
+            else:
+                verdict, confidence, reason = (
+                    QaVerdict.RULE_SUPPORTED_UNVERIFIED,
+                    0.0,
+                    "The source records no address or description, and the document does not "
+                    f"carry the expected reference {list(expectation.reference_values)[:2]}",
+                )
         elif len(text) < MIN_TEXT_CHARACTERS:
             verdict, confidence, reason = (
                 QaVerdict.UNREADABLE,
@@ -251,4 +264,5 @@ class OcrTextVerifier:
             f"qa/cases/{case_token}/ocr-text.json",
             [{"name": page.name, "error": page.error, "blocks": list(page.blocks)} for page in pages],
         )
-        return verdict, confidence, verdict == QaVerdict.VERIFIED_SAME, signals, None, reason, evidence
+        eligible = verdict in {QaVerdict.VERIFIED_SAME, QaVerdict.VERIFIED_REFERENCE_ONLY}
+        return verdict, confidence, eligible, signals, None, reason, evidence
