@@ -352,7 +352,7 @@ def derived_key_join_errors(
     return errors, warnings
 
 
-def inert_prefix_warnings(spec: MappingSpec) -> list[str]:
+def inert_prefix_findings(spec: MappingSpec) -> tuple[list[str], list[str]]:
     """Note a prefix template that can never match a tail.
 
     Declaring prefix mode and then ending the template in an untyped part makes
@@ -369,6 +369,7 @@ def inert_prefix_warnings(spec: MappingSpec) -> list[str]:
     because its folders carry no trailing text, and rejecting it would cost a
     compile attempt to change nothing.
     """
+    errors: list[str] = []
     findings: list[str] = []
     for route in spec.routes:
         if route.derived_key is None:
@@ -379,6 +380,21 @@ def inert_prefix_warnings(spec: MappingSpec) -> list[str]:
             continue
         for template in derivation.inventory_templates:
             if not template.prefix_is_inert:
+                continue
+            if template.is_whole_value_prefix:
+                # No structure is parsed at all, so this cannot be right under
+                # any data. Reported as an error rather than a warning: three
+                # separate compiles opened with this spelling.
+                errors.append(
+                    f"route {route.rule_id!r} uses inventory template {template.pattern!r}, a single "
+                    "untyped part covering the whole value. It parses no structure, so the key is "
+                    "the folder name itself and prefix mode cannot mean anything -- any folder that "
+                    "appends text after the reference will never match. Name the reference's parts "
+                    "instead, so the trailing text falls outside the key: "
+                    "'EXE_{year4:d}_{yy:d}-{number:d}-{code:a}' alongside "
+                    "'EXE_{year4:d}_{yy:d}-{number:d}', with key_parts naming only the parts that "
+                    "identify the case."
+                )
                 continue
             findings.append(
                 f"route {route.rule_id!r} declares inventory_match_mode 'prefix' but template "
@@ -391,7 +407,7 @@ def inert_prefix_warnings(spec: MappingSpec) -> list[str]:
                 "'EXE_{year:d}_{yy:d}-{number:d}' -- with part_defaults for the parts a shorter "
                 "alternative does not supply."
             )
-    return findings
+    return errors, findings
 
 
 BOOKKEEPING_FIELDS = {"_artifact_id"}
@@ -469,7 +485,9 @@ def verify_mapping_spec(
     cited_chunks: set[tuple[str, str, str]] = set()
     accepting_routes = 0
 
-    warnings.extend(inert_prefix_warnings(spec))
+    prefix_errors, prefix_warnings = inert_prefix_findings(spec)
+    errors.extend(prefix_errors)
+    warnings.extend(prefix_warnings)
     condition_errors, condition_warnings = undiscriminating_condition_findings(spec, preparation)
     errors.extend(condition_errors)
     warnings.extend(condition_warnings)

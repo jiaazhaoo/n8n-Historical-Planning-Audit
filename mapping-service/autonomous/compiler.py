@@ -187,6 +187,43 @@ END PREVIOUS ATTEMPTS
 """
 
 
+def precedent_notes(precedents: Sequence[dict[str, Any]]) -> str:
+    """Render this council's accepted joins into the prompt itself.
+
+    Carried in the packet first, where it changed nothing: two compiles read a
+    packet containing Exeter WP3's folder templates and opened with the same
+    naive whole-value key as the run that had no precedent at all. What does
+    move the compiler is text in the prompt body -- the rejection notes are
+    read and acted on -- so the precedent goes there too.
+    """
+    if not precedents:
+        return ""
+    blocks = []
+    for precedent in precedents:
+        for join in precedent["joins"]:
+            blocks.append(
+                f"  batch {precedent['batch']}, key {join.get('authoritative_key')!r} against "
+                f"{join.get('inventory_key_field')!r}:\n"
+                f"    source_templates:    {join.get('source_templates')}\n"
+                f"    inventory_templates: {join.get('inventory_templates')}\n"
+                f"    inventory_match_mode: {join.get('inventory_match_mode')!r}\n"
+                f"    key_parts:           {join.get('key_parts')}\n"
+                f"    part_normalizers:    {join.get('part_normalizers')}"
+            )
+    joined = "\n\n".join(blocks)
+    return f"""
+ACCEPTED FOR THIS COUNCIL ALREADY
+{joined}
+
+Each of those passed a holdout round, so it is measured evidence about how this council writes its
+references and names its folders -- not a guess. Start from those shapes and adapt them to the values
+you can see in this packet, rather than inventing a key from scratch. They say nothing about this
+batch, so never cite one in place of a capture rule, and drop any that cannot parse the values in
+front of you.
+END ACCEPTED FOR THIS COUNCIL
+"""
+
+
 def compiler_prompt(
     packet_path: Path,
     packet: dict[str, Any] | None = None,
@@ -195,6 +232,7 @@ def compiler_prompt(
 ) -> str:
     embedded_packet = json.dumps(packet, ensure_ascii=False, indent=2) if packet is not None else ""
     previous = rejection_notes(rejected, from_quality=from_quality)
+    precedents = precedent_notes((packet or {}).get("accepted_precedents", []))
     return f"""You are a capture-rules compiler for council planning-record mapping.
 
 The compiler packet is embedded below and is also frozen at {packet_path}. Do not call tools or
@@ -258,7 +296,7 @@ Non-negotiable rules:
 BEGIN COMPILER PACKET
 {embedded_packet}
 END COMPILER PACKET
-{previous}"""
+{precedents}{previous}"""
 
 
 class CodexOAuthCompiler:

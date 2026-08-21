@@ -176,6 +176,22 @@ class Template:
         final = list(PART.finditer(self.pattern))[-1]
         return not final.group("kind") and not self.pattern[final.end():]
 
+    @property
+    def is_whole_value_prefix(self) -> bool:
+        """True when the template is one untyped part and nothing else.
+
+        `{identifier}` parses no structure at all: the part matches the entire
+        value, so the key is the value and prefix mode cannot mean anything.
+        Distinct from a template that parses structure and only leaves its tail
+        greedy -- Exeter WP3 joins 99.3% under that spelling, while three
+        separate compiles reached for the whole-value form and matched nothing
+        outside the years whose folders happen to carry no trailing text.
+        """
+        if self.match_mode != "prefix":
+            return False
+        names = self.part_names
+        return len(names) == 1 and self.pattern.strip() == "{" + names[0] + "}"
+
     def parse(self, text: str) -> dict[str, str] | None:
         match = getattr(self, "_regex").match((text or "").strip())
         if not match:
