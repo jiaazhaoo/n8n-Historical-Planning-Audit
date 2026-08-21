@@ -1,0 +1,586 @@
+{
+  "active": true,
+  "connections": {
+    "Acceptance review on holdout": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Publication decision",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Compile rules and map every case": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Mapping outputs",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Gate outcome": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Acceptance review on holdout",
+            "type": "main"
+          }
+        ],
+        [
+          {
+            "index": 0,
+            "node": "Rule defect",
+            "type": "main"
+          }
+        ],
+        [
+          {
+            "index": 0,
+            "node": "Case review",
+            "type": "main"
+          }
+        ],
+        [
+          {
+            "index": 0,
+            "node": "Input defect",
+            "type": "main"
+          }
+        ],
+        [
+          {
+            "index": 0,
+            "node": "Pool exhausted",
+            "type": "main"
+          }
+        ],
+        [
+          {
+            "index": 0,
+            "node": "Unrecognised outcome",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Mapping job input": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Validate mapping request",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Mapping outputs": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Quality round on working pool",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Quality round on working pool": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Gate outcome",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Rework budget": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Compile rules and map every case",
+            "type": "main"
+          }
+        ],
+        [
+          {
+            "index": 0,
+            "node": "Rework exhausted",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Rule defect": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Rework budget",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Validate mapping request": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Compile rules and map every case",
+            "type": "main"
+          }
+        ]
+      ]
+    }
+  },
+  "description": null,
+  "id": "onmOXZ9hBg0lC6Di",
+  "meta": null,
+  "name": "file path mapping",
+  "nodeGroups": [],
+  "nodes": [
+    {
+      "id": "mapping-form",
+      "name": "Mapping job input",
+      "parameters": {
+        "formDescription": "Compile capture rules first, route every case to Amazon S3, Portal, or a safe rejection, and write case-complete mapping outputs.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Council",
+              "fieldName": "council",
+              "placeholder": "exeter",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Registered batch",
+              "fieldName": "batch",
+              "placeholder": "wp1",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Downloaded input directory",
+              "fieldName": "input_directory",
+              "placeholder": "/data/exeter/input-landmark/microfiche-capture-1977-1985_20260820T110605Z",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Source table path (optional override)",
+              "fieldName": "source_path",
+              "placeholder": "/data/.../source.xlsx"
+            },
+            {
+              "fieldLabel": "Capture rules paths (optional override; one per line)",
+              "fieldName": "capture_rules_paths",
+              "fieldType": "textarea",
+              "placeholder": "/data/.../CaptureRules-v2.docx"
+            },
+            {
+              "fieldLabel": "S3 inventory paths (one per line)",
+              "fieldName": "s3_inventory_paths",
+              "fieldType": "textarea",
+              "placeholder": "/data/exeter/file-matching/exeter-s3-folder-index.csv"
+            },
+            {
+              "fieldLabel": "Portal evidence paths (one per line)",
+              "fieldName": "portal_evidence_paths",
+              "fieldType": "textarea",
+              "placeholder": "/data/.../portal-evidence.csv"
+            },
+            {
+              "fieldLabel": "Quality sample size per round (default 12)",
+              "fieldName": "sample_size",
+              "placeholder": "12"
+            },
+            {
+              "fieldLabel": "Review budget in USD per round (default 3.00)",
+              "fieldName": "budget_usd",
+              "placeholder": "3.00"
+            }
+          ]
+        },
+        "formTitle": "File path mapping",
+        "options": {
+          "path": "file-path-mapping"
+        }
+      },
+      "position": [
+        -560,
+        0
+      ],
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.4,
+      "webhookId": "5ef3e031-9d2f-4f0e-9214-40c50f89b20d"
+    },
+    {
+      "id": "validate-input",
+      "name": "Validate mapping request",
+      "parameters": {
+        "jsCode": "const text = key => String($json[key] || '').trim();\nconst council = text('council').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');\nconst batch = text('batch');\nconst input_directory = text('input_directory').replace(/\\/+$/, '');\nif (!council) throw new Error('Council is required.');\nif (!batch) throw new Error('A registered batch is required.');\nif (!input_directory.startsWith('/data/') || input_directory.includes('/../') || input_directory.startsWith('/data/file-browser-data')) throw new Error('Input directory must be a safe path below /data and outside /data/file-browser-data.');\nreturn [{json:{council,batch,input_directory,\n  source_path:text('source_path'),\n  capture_rules_paths:text('capture_rules_paths'),\n  s3_inventory_paths:text('s3_inventory_paths'),\n  portal_evidence_paths:text('portal_evidence_paths'),\n  prior_findings: [], rework_round: 0}}];"
+      },
+      "position": [
+        -304,
+        0
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "run-mapping",
+      "name": "Compile rules and map every case",
+      "parameters": {
+        "body": "={{ JSON.stringify({council: $json.council, batch: $json.batch, input_directory: $json.input_directory, source_path: $json.source_path, capture_rules_paths: $json.capture_rules_paths, s3_inventory_paths: $json.s3_inventory_paths, portal_evidence_paths: $json.portal_evidence_paths, prior_findings: $json.prior_findings || [], rework_round: $json.rework_round || 0}) }}",
+        "contentType": "raw",
+        "method": "POST",
+        "options": {
+          "timeout": 1800000
+        },
+        "rawContentType": "application/json",
+        "sendBody": true,
+        "url": "http://host.docker.internal:5680/run"
+      },
+      "position": [
+        -16,
+        0
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "mapping-summary",
+      "name": "Mapping outputs",
+      "parameters": {
+        "jsCode": "const result = $json;\nif (!result.coverage?.exact) throw new Error('Mapping completed without exact source/mapping/audit coverage.');\nconst form = $('Mapping job input').first().json;\nconst runReport = result.outputs?.run_report;\nif (!runReport) throw new Error('Mapping run did not report an output directory.');\nconst runDirectory = runReport.replace(/\\/[^/]+$/, '');\nconst positive = (value, fallback) => {\n  const parsed = Number(String(value ?? '').trim());\n  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;\n};\nreturn [{json:{\n  status: result.status,\n  // Carried forward because the loop's return path skips the request node,\n  // so this is where a rework can read how deep it already is.\n  rework_round: result.rework_round || 0,\n  prior_findings: result.prior_findings || [],\n  production_published: false,\n  job_id: result.job_id,\n  council: result.council,\n  batch: result.batch,\n  case_count: result.case_count,\n  match_status_counts: result.match_status_counts,\n  source_type_counts: result.source_type_counts,\n  selected_capture_rules: result.selected_capture_rules,\n  selected_s3_inventory: result.selected_s3_inventory,\n  selected_portal_evidence: result.selected_portal_evidence,\n  outputs: result.outputs,\n  run_directory: runDirectory,\n  // Everything the quality endpoint needs, assembled once so the working round\n  // and the acceptance round cannot drift apart.\n  quality_request: {\n    council: result.council,\n    batch: result.batch,\n    run_directory: runDirectory,\n    stage: 'working',\n    sample_size: positive(form.sample_size, 12),\n    budget_usd: positive(form.budget_usd, 3.0),\n  },\n}}];"
+      },
+      "position": [
+        272,
+        0
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "quality-round-on-working-pool",
+      "name": "Quality round on working pool",
+      "parameters": {
+        "body": "={{ JSON.stringify($json.quality_request) }}",
+        "contentType": "raw",
+        "method": "POST",
+        "options": {
+          "timeout": 3600000
+        },
+        "rawContentType": "application/json",
+        "sendBody": true,
+        "url": "http://host.docker.internal:5680/quality"
+      },
+      "position": [
+        544,
+        0
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "acceptance-review-on-holdout",
+      "name": "Acceptance review on holdout",
+      "parameters": {
+        "body": "={{ JSON.stringify({ ...$('Mapping outputs').first().json.quality_request, stage: 'acceptance' }) }}",
+        "contentType": "raw",
+        "method": "POST",
+        "options": {
+          "timeout": 3600000
+        },
+        "rawContentType": "application/json",
+        "sendBody": true,
+        "url": "http://host.docker.internal:5680/quality"
+      },
+      "position": [
+        1104,
+        -160
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "publish-decision",
+      "name": "Publication decision",
+      "parameters": {
+        "jsCode": "const acceptance = $json;\nconst mapping = $('Mapping outputs').first().json;\nconst passed = acceptance.passed === true;\n// The holdout is the only sample the spec was never tuned against, so it is the\n// only one that may authorise publication.\nreturn [{json:{\n  status: passed ? 'accepted_on_holdout' : 'holdout_gate_failed',\n  production_published: false,\n  cleared_for_publication: passed,\n  council: mapping.council,\n  batch: mapping.batch,\n  case_count: mapping.case_count,\n  outputs: mapping.outputs,\n  acceptance_metrics: acceptance.metrics,\n  acceptance_reasons: acceptance.reasons || [],\n  sampling_plan: acceptance.sampling_plan,\n  budget: acceptance.budget,\n  model: acceptance.model,\n  quality_report: acceptance.quality_report,\n}}];"
+      },
+      "position": [
+        1392,
+        -160
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "gate-outcome",
+      "name": "Gate outcome",
+      "parameters": {
+        "options": {
+          "fallbackOutput": "extra",
+          "renameFallbackOutput": "unrecognised"
+        },
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "is-accept",
+                    "leftValue": "={{ $json.next.action }}",
+                    "operator": {
+                      "operation": "equals",
+                      "type": "string"
+                    },
+                    "rightValue": "accept"
+                  }
+                ],
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                }
+              },
+              "outputKey": "accept",
+              "renameOutput": true
+            },
+            {
+              "conditions": {
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "is-adjust_spec",
+                    "leftValue": "={{ $json.next.action }}",
+                    "operator": {
+                      "operation": "equals",
+                      "type": "string"
+                    },
+                    "rightValue": "adjust_spec"
+                  }
+                ],
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                }
+              },
+              "outputKey": "adjust_spec",
+              "renameOutput": true
+            },
+            {
+              "conditions": {
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "is-investigate_cases",
+                    "leftValue": "={{ $json.next.action }}",
+                    "operator": {
+                      "operation": "equals",
+                      "type": "string"
+                    },
+                    "rightValue": "investigate_cases"
+                  }
+                ],
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                }
+              },
+              "outputKey": "investigate_cases",
+              "renameOutput": true
+            },
+            {
+              "conditions": {
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "is-review_inputs",
+                    "leftValue": "={{ $json.next.action }}",
+                    "operator": {
+                      "operation": "equals",
+                      "type": "string"
+                    },
+                    "rightValue": "review_inputs"
+                  }
+                ],
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                }
+              },
+              "outputKey": "review_inputs",
+              "renameOutput": true
+            },
+            {
+              "conditions": {
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "is-stop_exhausted",
+                    "leftValue": "={{ $json.next.action }}",
+                    "operator": {
+                      "operation": "equals",
+                      "type": "string"
+                    },
+                    "rightValue": "stop_exhausted"
+                  }
+                ],
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                }
+              },
+              "outputKey": "stop_exhausted",
+              "renameOutput": true
+            }
+          ]
+        }
+      },
+      "position": [
+        832,
+        0
+      ],
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4
+    },
+    {
+      "id": "rule-defect",
+      "name": "Rule defect",
+      "parameters": {
+        "jsCode": "// adjust_spec means the rule itself is wrong, which is the one gate outcome a\n// recompile can answer. What the round saw goes back to the compiler as\n// feedback instead of waiting for someone to resubmit the form and hope for a\n// different spec. Stable inputs come from the request; loop state comes from\n// the mapping step, which the return path does re-execute.\nconst review = $json;\nconst request = $('Validate mapping request').first().json;\nconst mapping = $('Mapping outputs').first().json;\nconst next = review.next || {};\n\nconst round = Number(mapping.rework_round || 0);\nconst finding = [];\nif (next.detail) finding.push(String(next.detail));\nfor (const item of (next.focus || [])) finding.push(String(item));\nfor (const reason of (review.reasons || [])) finding.push(String(reason));\nif (!finding.length) finding.push('A quality round rejected the mapping without naming a cause.');\n\nreturn [{json:{\n  council: request.council,\n  batch: request.batch,\n  input_directory: request.input_directory,\n  source_path: request.source_path,\n  capture_rules_paths: request.capture_rules_paths,\n  s3_inventory_paths: request.s3_inventory_paths,\n  portal_evidence_paths: request.portal_evidence_paths,\n  rework_round: round + 1,\n  prior_findings: [...(mapping.prior_findings || []), finding],\n  status: 'quality_gate_failed_rule',\n  action: next.action,\n  detail: next.detail,\n  focus: next.focus || [],\n  round_index: review.round_index,\n  metrics: review.metrics,\n  coverage: review.coverage,\n  quality_report: review.quality_report,\n  production_published: false,\n}}];"
+      },
+      "position": [
+        1104,
+        128
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "case-review",
+      "name": "Case review",
+      "parameters": {
+        "jsCode": "const review = $json;\nconst next = review.next || {};\nconst plan = review.sampling_plan || {};\n// The loop advances one round per submission: the state file remembers which\n// cases each round drew, so resubmitting samples ground this batch has not seen.\nreturn [{json:{\n  status: \"quality_gate_failed_cases\",\n  production_published: false,\n  action: next.action,\n  detail: next.detail,\n  focus: next.focus || [],\n  round_index: review.round_index,\n  next_round_index: (review.round_index || 0) + 1,\n  sampled_ids: review.sampled_ids,\n  metrics: review.metrics,\n  coverage: review.coverage,\n  working_pool_remaining: Math.max(0, (plan.working_cases || 0) - (review.sampled_ids || []).length),\n  quality_report: review.quality_report,\n  guidance: \"Failures do not share a signature. Inspect the named cases in the quality report before changing anything; a spec change made without a shared cause tends to fit the sample.\",\n}}];"
+      },
+      "position": [
+        1104,
+        288
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "input-defect",
+      "name": "Input defect",
+      "parameters": {
+        "jsCode": "const review = $json;\nconst next = review.next || {};\nconst plan = review.sampling_plan || {};\n// The loop advances one round per submission: the state file remembers which\n// cases each round drew, so resubmitting samples ground this batch has not seen.\nreturn [{json:{\n  status: \"quality_gate_blocked_inputs\",\n  production_published: false,\n  action: next.action,\n  detail: next.detail,\n  focus: next.focus || [],\n  round_index: review.round_index,\n  next_round_index: (review.round_index || 0) + 1,\n  sampled_ids: review.sampled_ids,\n  metrics: review.metrics,\n  coverage: review.coverage,\n  working_pool_remaining: Math.max(0, (plan.working_cases || 0) - (review.sampled_ids || []).length),\n  quality_report: review.quality_report,\n  guidance: \"Every judged case failed for the same non-mapping reason, so the batch itself cannot be content-verified. Do not change the mapping spec; fix or replace the source evidence.\",\n}}];"
+      },
+      "position": [
+        1104,
+        448
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "pool-exhausted",
+      "name": "Pool exhausted",
+      "parameters": {
+        "jsCode": "const review = $json;\nconst next = review.next || {};\nconst plan = review.sampling_plan || {};\n// The loop advances one round per submission: the state file remembers which\n// cases each round drew, so resubmitting samples ground this batch has not seen.\nreturn [{json:{\n  status: \"quality_pool_exhausted\",\n  production_published: false,\n  action: next.action,\n  detail: next.detail,\n  focus: next.focus || [],\n  round_index: review.round_index,\n  next_round_index: (review.round_index || 0) + 1,\n  sampled_ids: review.sampled_ids,\n  metrics: review.metrics,\n  coverage: review.coverage,\n  working_pool_remaining: Math.max(0, (plan.working_cases || 0) - (review.sampled_ids || []).length),\n  quality_report: review.quality_report,\n  guidance: \"Every working-pool case has been reviewed. Further rounds would resample ground already used to adjust the spec. Run the acceptance stage on the holdout, or widen the population.\",\n}}];"
+      },
+      "position": [
+        1104,
+        608
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "unrecognised",
+      "name": "Unrecognised outcome",
+      "parameters": {
+        "jsCode": "const review = $json;\nconst next = review.next || {};\nconst plan = review.sampling_plan || {};\n// The loop advances one round per submission: the state file remembers which\n// cases each round drew, so resubmitting samples ground this batch has not seen.\nreturn [{json:{\n  status: \"quality_outcome_unrecognised\",\n  production_published: false,\n  action: next.action,\n  detail: next.detail,\n  focus: next.focus || [],\n  round_index: review.round_index,\n  next_round_index: (review.round_index || 0) + 1,\n  sampled_ids: review.sampled_ids,\n  metrics: review.metrics,\n  coverage: review.coverage,\n  working_pool_remaining: Math.max(0, (plan.working_cases || 0) - (review.sampled_ids || []).length),\n  quality_report: review.quality_report,\n  guidance: \"The quality service returned an action this workflow does not handle. Treat the run as unverified and inspect the service response.\",\n}}];"
+      },
+      "position": [
+        1104,
+        768
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "rework-budget-if",
+      "name": "Rework budget",
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "under-rework-limit",
+              "leftValue": "={{ $json.rework_round }}",
+              "operator": {
+                "operation": "lte",
+                "type": "number"
+              },
+              "rightValue": 2
+            }
+          ],
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          }
+        },
+        "options": {}
+      },
+      "position": [
+        1324,
+        128
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2
+    },
+    {
+      "id": "rework-exhausted",
+      "name": "Rework exhausted",
+      "parameters": {
+        "jsCode": "// An unbounded rework loop searches until something passes, which is a\n// different thing from getting it right. Two recompiles, then a person looks.\nconst j = $json;\nreturn [{json:{\n  status: 'rework_budget_exhausted',\n  production_published: false,\n  reworks_attempted: Math.max(0, Number(j.rework_round || 0) - 1),\n  action: j.action,\n  detail: j.detail,\n  focus: j.focus || [],\n  findings_so_far: j.prior_findings || [],\n  metrics: j.metrics,\n  coverage: j.coverage,\n  quality_report: j.quality_report,\n}}];"
+      },
+      "position": [
+        1544,
+        288
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    }
+  ],
+  "pinData": {},
+  "settings": {
+    "binaryMode": "separate",
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": []
+}
