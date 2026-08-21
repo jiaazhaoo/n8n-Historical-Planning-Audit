@@ -271,7 +271,10 @@ Non-negotiable rules:
 - Retain ambiguity_action=reject, content_verified=false, and automatic_confidence <= 0.74.
 - Every accepting route must cite one or more capture_rule_chunks. Copy artifact_id, location, and
   excerpt_sha256 exactly from a cited chunk and write a concise statement of what that chunk supports.
-- If the evidence cannot justify an accepting route, emit an explicit reject route instead of guessing.
+- If the evidence cannot justify an accepting route for a population, emit an explicit reject route
+  for that population instead of guessing. This is per population, never for all of them: a spec
+  where every route rejects maps nothing and is not a spec. If earlier attempts were rejected,
+  fix the named cause -- rejecting the whole batch is not a way to satisfy the verifier.
 - When the source reference and the inventory key are written differently -- different separators,
   leading zeros, a prefix or year the reference does not carry -- set derived_key instead of relying on
   normalizers. Whole-field normalizers cannot rebuild a key from parts. Declare source_templates and

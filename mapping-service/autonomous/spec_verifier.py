@@ -729,7 +729,18 @@ def verify_mapping_spec(
                 )
 
     if accepting_routes == 0:
-        warnings.append("MappingSpec contains only reject routes; this is safe but produces no accepted mappings")
+        # Called safe once, and passed as a warning. It is not safe, it is
+        # empty: Sheffield wp1 came back with five reject routes and 0 of 1,757
+        # cases mapped, having spent the whole compile budget to do it. The
+        # reject route exists for a population the evidence cannot justify, not
+        # for the batch as a whole -- a spec that accepts nothing is the absence
+        # of a spec, and saying so is what lets the next attempt be different.
+        errors.append(
+            "MappingSpec has no accepting route: every route rejects, so the batch maps nothing. "
+            "A reject route is for a population the evidence cannot justify, not for all of them. "
+            "Where a population's evidence is genuinely unusable, say so for that population and "
+            "write accepting routes for the rest."
+        )
     negative_errors = ambiguity_negative_test_errors(spec, preparation)
     errors.extend(negative_errors)
     join_errors, join_warnings = derived_key_join_errors(spec, preparation)
