@@ -137,6 +137,38 @@ def classify_input_files(directory: Path) -> tuple[list[Path], list[Path], list[
     return source, rules, breakdown
 
 
+def select_source_table(paths: list[Path]) -> list[Path]:
+    """Reduce candidates that are the same table, or a derivative of it.
+
+    Sheffield's Work Package 1 folder holds three files that all read as source
+    information: the table, the same table as CSV, and a geocoding-input
+    variant. Refusing to choose blocked the run outright, and neither reduction
+    below involves a guess about content.
+
+    A file whose stem another file extends with a qualifier is the base table:
+    a derivative names what it is for, an original does not. Anything the two
+    rules cannot reduce to one is still refused -- picking the wrong table maps
+    the wrong population, which is worse than stopping.
+    """
+    if len(paths) <= 1:
+        return paths
+    by_stem: dict[str, list[Path]] = {}
+    for path in paths:
+        by_stem.setdefault(path.stem.casefold().strip(), []).append(path)
+    # One table written twice: prefer the spreadsheet, which carries types.
+    reduced = [
+        sorted(group, key=lambda path: (path.suffix.casefold() != ".xlsx", path.name))[0]
+        for group in by_stem.values()
+    ]
+    stems = {path.stem.casefold().strip(): path for path in reduced}
+    bases = [
+        path
+        for stem, path in stems.items()
+        if not any(other != stem and stem.startswith(other) for other in stems)
+    ]
+    return sorted(bases, key=lambda path: path.name) if bases else sorted(reduced, key=lambda path: path.name)
+
+
 def select_latest_rule_versions(paths: Iterable[Path]) -> list[Path]:
     """Keep the highest vN within an otherwise identical filename family."""
     selected: dict[str, tuple[int, Path]] = {}
@@ -456,10 +488,16 @@ def run_mapping(payload: dict[str, Any]) -> dict[str, Any]:
 
     discovered_source, discovered_rules, discovered_breakdown = classify_input_files(input_directory)
     explicit_source = list_value(payload.get("source_path"))
-    source_paths = [safe_data_path(value) for value in explicit_source] if explicit_source else discovered_source
+    source_paths = (
+        [safe_data_path(value) for value in explicit_source]
+        if explicit_source
+        else select_source_table(discovered_source)
+    )
     if len(source_paths) != 1:
+        listed = ", ".join(sorted(path.name for path in source_paths)) or "none"
         raise MappingServiceError(
-            f"Expected exactly one source table; found {len(source_paths)}. Supply source_path explicitly."
+            f"Expected exactly one source table; found {len(source_paths)}: {listed}. "
+            "Supply source_path explicitly."
         )
     explicit_rules = list_value(payload.get("capture_rules_paths"))
     rule_paths = [safe_data_path(value) for value in explicit_rules] if explicit_rules else select_latest_rule_versions(discovered_rules)
