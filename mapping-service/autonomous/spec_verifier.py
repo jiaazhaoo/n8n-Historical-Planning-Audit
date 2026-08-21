@@ -116,6 +116,87 @@ def ambiguity_negative_test_errors(spec: MappingSpec, preparation: PreparationRe
     return errors
 
 
+MIN_STRATUM_CASES = 30
+MAX_STRATUM_VALUES = 60
+STRATUM_SHORTFALL = 0.25
+STRATUM_EVIDENCE_RATIO = 0.5
+
+
+def _stratum_findings(
+    rule_id: str,
+    source_keys: list[tuple[str, ...]],
+    index: set[tuple[str, ...]],
+    key_parts: tuple[str, ...],
+) -> tuple[list[str], list[str]]:
+    """Report a subpopulation that joins far below the rest of its route.
+
+    An overall rate hides a local failure. Exeter's Microfiche spec joined 90.1%
+    and passed verification while all 859 records of 1977 -- whose folders append
+    the site address -- matched nothing; the other eight years carried the rate.
+
+    Requiring a *complete* miss is not enough: the next spec reached 2.1% of 1977
+    against 100% everywhere else, and eighteen accidental hits would have hidden
+    it again. What marks a defect is the shortfall against the route's own rate,
+    not a zero.
+
+    A shortfall is only a defect when the scans are actually there. Where the
+    inventory holds few keys in the stratum, they were never delivered, no spec
+    can join them, and reporting it would cost the compiler an attempt it has no
+    way to use -- so that case is a warning.
+    """
+    errors: list[str] = []
+    warnings: list[str] = []
+    if len(source_keys) < MIN_STRATUM_CASES or not index:
+        return errors, warnings
+    overall = sum(1 for key in source_keys if key in index) / len(source_keys)
+    if overall <= 0:
+        return errors, warnings
+
+    for position, part in enumerate(key_parts):
+        if any(len(key) <= position for key in source_keys):
+            continue
+        totals: dict[str, int] = {}
+        joins: dict[str, int] = {}
+        for key in source_keys:
+            value = key[position]
+            totals[value] = totals.get(value, 0) + 1
+            if key in index:
+                joins[value] = joins.get(value, 0) + 1
+        if not 2 <= len(totals) <= MAX_STRATUM_VALUES:
+            continue
+
+        stocked: dict[str, int] = {}
+        for key in index:
+            if len(key) > position:
+                stocked[key[position]] = stocked.get(key[position], 0) + 1
+
+        for value, count in sorted(totals.items(), key=lambda item: -item[1]):
+            joined = joins.get(value, 0)
+            if count < MIN_STRATUM_CASES:
+                continue
+            rate = joined / count
+            if rate >= overall * STRATUM_SHORTFALL:
+                continue
+            available = stocked.get(value, 0)
+            if available < count * STRATUM_EVIDENCE_RATIO:
+                warnings.append(
+                    f"route {rule_id}: {count} cases have {part}={value!r} and join {rate:.1%}, but "
+                    f"the inventory holds only {available} keys there, so those scans are absent "
+                    "rather than unreachable"
+                )
+                continue
+            errors.append(
+                f"route {rule_id}: cases with {part}={value!r} join {joined}/{count} ({rate:.1%}) "
+                f"while the route joins {overall:.1%} overall, and the inventory holds {available} "
+                f"keys for {part}={value!r}. Those scans exist and the derivation is not reaching "
+                f"them, so {part}={value!r} is written differently on the two sides. Read real key "
+                "values from both sides for that stratum and add the template alternative it needs. "
+                "Do not widen key_parts to absorb the difference: a part the source leaves at its "
+                "default can never equal one the inventory fills in."
+            )
+    return errors, warnings
+
+
 def derived_key_join_errors(
     spec: MappingSpec, preparation: PreparationReport
 ) -> tuple[list[str], list[str]]:
@@ -173,6 +254,7 @@ def derived_key_join_errors(
         selected = rows_by_rule.get(route.rule_id, [])
         joined = 0
         keyed = 0
+        source_keys: list[tuple[str, ...]] = []
         for row in selected:
             value = str(row.get(route.authoritative_key) or "").strip()
             if not value and route.fallback_key:
@@ -181,8 +263,15 @@ def derived_key_join_errors(
             if key is None:
                 continue
             keyed += 1
+            source_keys.append(key)
             if key in index:
                 joined += 1
+
+        stratum_errors, stratum_warnings = _stratum_findings(
+            route.rule_id, source_keys, index, derivation.key_parts
+        )
+        errors.extend(stratum_errors)
+        warnings.extend(stratum_warnings)
 
         rate = joined / len(selected) if selected else 0.0
         warnings.append(
@@ -243,6 +332,64 @@ def inert_prefix_errors(spec: MappingSpec) -> list[str]:
     return errors
 
 
+BOOKKEEPING_FIELDS = {"_artifact_id"}
+
+
+def undiscriminating_condition_findings(
+    spec: MappingSpec, preparation: PreparationReport
+) -> tuple[list[str], list[str]]:
+    """Report route conditions that select every row they are shown.
+
+    Exeter's Microfiche spec conditioned one route on six fields, each holding a
+    single value across all 8,898 rows -- `always` written six times. Every such
+    condition is inert today and a silent reject tomorrow: the next delivery
+    whose failed-checks reads anything but TA-29 routes nowhere, and the run
+    reports no_match rather than an error.
+
+    `_artifact_id` is worse than redundant, so it is an error rather than a
+    warning: preparation assigns it per download, so a spec carrying it can
+    never be reused on the next delivery of the same work package.
+    """
+    errors: list[str] = []
+    warnings: list[str] = []
+    accepting = [route for route in spec.routes if route.target != RouteTarget.REJECT]
+    if not accepting:
+        return errors, warnings
+
+    counts: dict[str, set[str]] = {}
+    try:
+        _, source_rows = read_csv(preparation.source_path)
+    except OSError:
+        return errors, warnings
+    for route in accepting:
+        for condition in route.conditions:
+            field = getattr(condition, "field", None)
+            if field and field not in counts:
+                counts[field] = {row.get(field, "") for row in source_rows}
+
+    for route in accepting:
+        for condition in route.conditions:
+            field = getattr(condition, "field", None)
+            if not field:
+                continue
+            if field in BOOKKEEPING_FIELDS:
+                errors.append(
+                    f"route {route.rule_id!r} conditions on {field!r}, which preparation assigns "
+                    "per download rather than reading from the source. The spec would reject "
+                    "every row of the next delivery of this work package. Route on a field the "
+                    "source itself carries, or on _evidence_role when the inventory is mixed."
+                )
+            elif len(counts.get(field, set())) == 1:
+                only = next(iter(counts[field]))
+                warnings.append(
+                    f"route {route.rule_id!r} conditions on {field}={only!r}, the only value in "
+                    f"all {len(source_rows)} source rows, so the condition selects everything it "
+                    "is shown. It discriminates nothing now and silently rejects any future row "
+                    "that differs."
+                )
+    return errors, warnings
+
+
 def verify_mapping_spec(
     *,
     job_id: str,
@@ -261,6 +408,9 @@ def verify_mapping_spec(
     accepting_routes = 0
 
     errors.extend(inert_prefix_errors(spec))
+    condition_errors, condition_warnings = undiscriminating_condition_findings(spec, preparation)
+    errors.extend(condition_errors)
+    warnings.extend(condition_warnings)
 
     if spec.council != preparation.council:
         errors.append(f"spec council {spec.council!r} does not equal prepared council {preparation.council!r}")

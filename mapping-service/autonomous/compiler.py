@@ -147,6 +147,11 @@ Non-negotiable rules:
 - Translate capture-rule prose into ordered route predicates. Do not invent S3 paths or Portal URLs.
 - S3 and Portal candidates must come from exact inventory rows through inventory key/path fields.
 - In a mixed inventory, filter each accepting route with _evidence_role.
+- Never condition on _artifact_id: preparation assigns it per download, so a
+  spec carrying it rejects the next delivery of the same work package.
+- Do not condition on a field whose value_counts show one value across every
+  row. It selects everything it is shown, and silently rejects any future row
+  that differs. Condition only on what actually separates the routes.
 - An authoritative field may use a fallback only when the authoritative value is blank.
 - Retain ambiguity_action=reject, content_verified=false, and automatic_confidence <= 0.74.
 - Every accepting route must cite one or more capture_rule_chunks. Copy artifact_id, location, and
