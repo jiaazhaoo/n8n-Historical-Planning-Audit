@@ -57,6 +57,14 @@ MAPPING_TOTAL_FIELDS = (
     "portal_path_note",
     "path_source",
     "path_found",
+    # Filled by the download stage, matched on the charge identifier. The
+    # mapping stage leaves all four empty: it has downloaded nothing, and a
+    # table that writes a local path it never verified starts claiming files
+    # that are not there.
+    "local_amazons3_path",
+    "local_amazons3_file_count",
+    "local_portal_path",
+    "local_portal_file_count",
 )
 
 MAPPINGJ_FIELDS = (
@@ -344,7 +352,7 @@ def export_outputs(*, workspace: Path, council: str, batch: str, output_director
                 "amazons3_path_note": reason if route == "s3" else "",
                 "portal_path": portal_path,
                 "portal_path_cfd": (
-                    (audit.get("decision_confidence") or "0.00").strip() if route == "portal" else "0.00"
+                    (audit.get("mapping_confidence") or audit.get("decision_confidence") or "0.00").strip() if route == "portal" else "0.00"
                 ),
                 "portal_path_mappingrule": (audit.get("rule_id") or "").strip() if route == "portal" else "",
                 "portal_path_note": reason if route == "portal" else "",
@@ -360,13 +368,22 @@ def export_outputs(*, workspace: Path, council: str, batch: str, output_director
 
     output_directory.mkdir(parents=True, exist_ok=False)
     prefix = f"{council}-{slug(batch, label='batch')}"
-    mapping_total_path = output_directory / f"{prefix}-mapping.csv"
-    mappingj_path = output_directory / f"{prefix}-mappingj.csv"
-    exported_audit_path = output_directory / f"{prefix}-mapping-audit.csv"
+    # A batch has one current mapping, so the three delivered tables sit at a
+    # fixed path in the council's own folder rather than inside this run's
+    # timestamped directory. Exeter's wp3 accumulated ten run directories, each
+    # with its own table, which left the download stage no answer to which one
+    # it should fill its four columns into.
+    delivery = DATA_ROOT / council / "file-matching"
+    delivery.mkdir(parents=True, exist_ok=True)
+    mapping_total_path = delivery / f"{prefix}-full-mapping.csv"
+    mappingj_path = delivery / f"{prefix}-mapping.csv"
+    exported_audit_path = delivery / f"{prefix}-mapping-audit.csv"
+    full_mapping_xlsx_path = delivery / f"{prefix}-full-mapping.xlsx"
+    mappingj_xlsx_path = delivery / f"{prefix}-mapping.xlsx"
+    # The spec and the report describe this run, not the batch, so they stay
+    # with the run that produced them.
     exported_spec_path = output_directory / "routing-spec.json"
     report_path = output_directory / "mapping-run-report.json"
-    full_mapping_xlsx_path = output_directory / f"{prefix}_full_mapping.xlsx"
-    mappingj_xlsx_path = output_directory / f"{prefix}_mappingj.xlsx"
     write_csv(mapping_total_path, mapping_total_rows, MAPPING_TOTAL_FIELDS)
     write_csv(mappingj_path, mappingj_rows, MAPPINGJ_FIELDS)
     # The CSVs stay the runtime contract that file-browser reads; the workbooks
