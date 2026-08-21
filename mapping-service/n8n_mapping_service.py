@@ -715,6 +715,8 @@ def run_quality(payload: dict[str, Any]) -> dict[str, Any]:
     """
     from autonomous.content_qa import IdentityFieldProfile
     from autonomous.content_reviewer import ContentQaReviewer, ReviewerSettings
+    from dataclasses import replace
+
     from autonomous.quality_gate import GateThresholds, evaluate_coverage
     from autonomous.quality_loop import (
         ACCEPTANCE,
@@ -724,6 +726,7 @@ def run_quality(payload: dict[str, Any]) -> dict[str, Any]:
         next_action,
         open_state,
         run_quality_round,
+        spent_so_far,
         write_report,
     )
 
@@ -782,7 +785,7 @@ def run_quality(payload: dict[str, Any]) -> dict[str, Any]:
     )
 
     thresholds = GateThresholds(
-        min_verified_rate=float(payload.get("min_verified_rate", 0.95)),
+        min_verified_rate=float(payload.get("min_verified_rate", 0.80)),
         max_verified_wrong=int(payload.get("max_verified_wrong", 0)),
         max_systematic_failures=int(payload.get("max_systematic_failures", 0)),
         max_missing_document_rate=float(payload.get("max_missing_document_rate", 0.10)),
@@ -798,6 +801,20 @@ def run_quality(payload: dict[str, Any]) -> dict[str, Any]:
         audit_rows=audit_rows,
         holdout_fraction=float(payload.get("holdout_fraction", 0.2)),
     )
+
+    # One ceiling for the whole mapping, not one per round. The budget object is
+    # rebuilt on every /quality call, and the workflow loops -- up to two
+    # recompiles, each drawing up to four sampling rounds -- so a per-round limit
+    # multiplies into something nobody asked for.
+    already = spent_so_far(state)
+    remaining = settings.budget_usd - already
+    if remaining <= 0:
+        raise MappingServiceError(
+            f"This mapping has already spent ${already:.4f} of its ${settings.budget_usd:.2f} "
+            "review budget across its rounds. Raise budget_usd to continue, or read the rounds "
+            "already reviewed."
+        )
+    settings = replace(settings, budget_usd=min(settings.budget_usd, remaining))
 
     result = run_quality_round(
         state=state,

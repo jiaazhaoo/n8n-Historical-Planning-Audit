@@ -276,6 +276,10 @@ def run_quality_round(
             "reasons": list(outcome.reasons),
             "failure_signatures": [item.describe() for item in outcome.signatures],
             "artifacts": str(output_dir),
+            # Kept per round so the whole mapping can be held to one ceiling.
+            # The budget object is rebuilt for every /quality call, so without
+            # this the limit is per round and a loop multiplies it.
+            "spent_usd": float((verification.get("budget") or {}).get("spent_usd") or 0.0),
             "reviewed_at": utc_now(),
         }
     )
@@ -287,6 +291,11 @@ def run_quality_round(
         outcome=outcome,
         sampled_ids=include_ids,
     )
+
+
+def spent_so_far(state: LoopState) -> float:
+    """What every round of this mapping has already cost."""
+    return sum(float(record.get("spent_usd") or 0.0) for record in state.rounds)
 
 
 def shared_reason(
