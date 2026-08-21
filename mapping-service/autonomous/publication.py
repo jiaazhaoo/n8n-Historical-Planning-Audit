@@ -89,11 +89,22 @@ def resolve_paths(current: dict[str, str], replacement: dict[str, str]) -> dict[
     if incoming_scan:
         settled["portal_path"] = ""
         return settled
+
     if held_scan:
-        # This batch has no scan for the case and the runtime already does.
         settled["amazons3_path"] = held_scan
         settled["amazons3_confidence"] = current.get("amazons3_confidence") or "0.00"
         settled["portal_path"] = ""
+        settled["file_found"] = "yes"
+        return settled
+
+    # Neither side has a scan. Whatever the runtime already holds for this case
+    # is all there is, and this batch found nothing to replace it with. Writing
+    # the export's empty column over it erased the portal path of 43 Exeter
+    # cases that publishing WP3 simply could not match -- the wholesale
+    # overwrite this function exists to stop, in the branch it did not cover.
+    held_portal = (current.get("portal_path") or "").strip()
+    if held_portal and not (replacement.get("portal_path") or "").strip():
+        settled["portal_path"] = held_portal
         settled["file_found"] = "yes"
     return settled
 
