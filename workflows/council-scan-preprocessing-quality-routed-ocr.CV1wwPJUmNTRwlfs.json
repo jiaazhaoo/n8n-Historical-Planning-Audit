@@ -1,0 +1,472 @@
+{
+  "active": true,
+  "connections": {
+    "Check inputs": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Inputs usable",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Inputs usable": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Start pipeline",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Poll budget": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Wait",
+            "type": "main"
+          }
+        ],
+        [
+          {
+            "index": 0,
+            "node": "Run needs a look",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Poll progress": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Still running",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Preprocessing job input": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Validate request",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Produced OCR": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Preprocessed",
+            "type": "main"
+          }
+        ],
+        [
+          {
+            "index": 0,
+            "node": "Run needs a look",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Run needs a look": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Needs attention",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Start pipeline": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Started",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Started": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Wait",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Still running": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Poll budget",
+            "type": "main"
+          }
+        ],
+        [
+          {
+            "index": 0,
+            "node": "Produced OCR",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Validate request": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Check inputs",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Wait": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Poll progress",
+            "type": "main"
+          }
+        ]
+      ]
+    }
+  },
+  "description": null,
+  "id": "CV1wwPJUmNTRwlfs",
+  "meta": null,
+  "name": "Council scan preprocessing — quality-routed OCR",
+  "nodeGroups": [],
+  "nodes": [
+    {
+      "id": "preprocess-form",
+      "name": "Preprocessing job input",
+      "parameters": {
+        "formDescription": "Preprocess and OCR a batch's downloaded scans. Everything comes from the 20-column total mapping table: council and batch from its path, the files from its local-path columns.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Mapping table",
+              "fieldName": "mapping_table",
+              "fieldType": "text",
+              "placeholder": "/data/exeter/file-matching/exeter-wp3-full-mapping.csv",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "OCR model",
+              "fieldName": "engine",
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "ppocr-v6"
+                  },
+                  {
+                    "option": "ppocr-v5"
+                  },
+                  {
+                    "option": "vlm"
+                  }
+                ]
+              },
+              "fieldType": "dropdown",
+              "requiredField": true
+            }
+          ]
+        },
+        "formTitle": "Council scan preprocessing",
+        "options": {}
+      },
+      "position": [
+        -460,
+        0
+      ],
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "webhookId": "council-scan-preprocessing"
+    },
+    {
+      "id": "validate",
+      "name": "Validate request",
+      "parameters": {
+        "jsCode": "// Everything is in the mapping table. Council and batch are stated twice in its\n// path, and each case's file is named absolutely in its local-path columns, so\n// the directory to walk is derived from those rather than typed again -- a\n// second answer to a question the table already answers is a second chance to\n// answer it wrong, and it would fail halfway through disassembly.\nconst text = key => String($json[key] || '').trim();\nconst mapping_table = text('mapping_table');\n// One model reads the batch. The pipeline can run PP-OCR over everything and\n// the VLM over what it scored unclear, but then the same page has two answers\n// and nothing records which engine produced which.\nconst engine = (text('engine') || 'ppocr-v6').toLowerCase();\n\nif (!mapping_table) throw new Error('Mapping table is required.');\nif (!mapping_table.startsWith('/data/') || mapping_table.includes('/../') || mapping_table.startsWith('/data/file-browser-data')) {\n  throw new Error('Mapping table must be a safe path below /data and outside /data/file-browser-data.');\n}\nif (!/-full-mapping\\.(csv|xlsx)$/.test(mapping_table)) {\n  throw new Error('The mapping table must be the 20-column total table, <council>-<batch>-full-mapping.csv. The slim table carries no confidence and no local download path.');\n}\nif (!['ppocr-v6', 'ppocr-v5', 'vlm'].includes(engine)) {\n  throw new Error('OCR model must be ppocr-v6, ppocr-v5 or vlm.');\n}\n\nreturn [{json:{mapping_table, engine}}];"
+      },
+      "position": [
+        -240,
+        0
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "start-run",
+      "name": "Start pipeline",
+      "parameters": {
+        "body": "={{ JSON.stringify({mapping_table: $json.mapping_table, engine: $json.engine}) }}",
+        "contentType": "raw",
+        "method": "POST",
+        "options": {
+          "timeout": 600000
+        },
+        "rawContentType": "application/json",
+        "sendBody": true,
+        "url": "http://host.docker.internal:5681/start"
+      },
+      "position": [
+        200,
+        0
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "started",
+      "name": "Started",
+      "parameters": {
+        "jsCode": "// What the run is, before any of it has happened. The adapted row count is the\n// number that matters: a mapping table lists every case, and only the ones with\n// a local download can be preprocessed.\nconst r = $json;\nconst t = r.input_table || {};\nreturn [{json:{\n  run_id: r.run_id,\n  work_dir: r.work_dir,\n  council: r.council,\n  batch: r.batch,\n  engine: r.engine,\n  vlm: r.vlm,\n  raw_input: r.raw_input,\n  scan_root: r.scan_root,\n  cases_to_process: t.rows,\n  checked: $('Inputs usable').first().json,\n  cases_in_mapping_table: t.rows_in_mapping_table,\n  cases_without_local_download: t.rows_without_local_download,\n  cases_from_portal: t.rows_from_portal,\n  log: r.log,\n  poll: 0,\n}}];"
+      },
+      "position": [
+        420,
+        0
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "wait-node",
+      "name": "Wait",
+      "parameters": {
+        "amount": 5,
+        "unit": "minutes"
+      },
+      "position": [
+        640,
+        0
+      ],
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "webhookId": "preprocess-wait"
+    },
+    {
+      "id": "poll-status",
+      "name": "Poll progress",
+      "parameters": {
+        "body": "={{ JSON.stringify({work_dir: $('Started').first().json.work_dir}) }}",
+        "contentType": "raw",
+        "method": "POST",
+        "options": {
+          "timeout": 120000
+        },
+        "rawContentType": "application/json",
+        "sendBody": true,
+        "url": "http://host.docker.internal:5681/status"
+      },
+      "position": [
+        860,
+        0
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "still-running-if",
+      "name": "Still running",
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "still-running",
+              "leftValue": "={{ $json.state }}",
+              "operator": {
+                "operation": "equals",
+                "type": "string"
+              },
+              "rightValue": "running"
+            }
+          ],
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          }
+        },
+        "options": {}
+      },
+      "position": [
+        1080,
+        0
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2
+    },
+    {
+      "id": "poll-budget-if",
+      "name": "Poll budget",
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "under-poll-budget",
+              "leftValue": "={{ $runIndex }}",
+              "operator": {
+                "operation": "lt",
+                "type": "number"
+              },
+              "rightValue": 96
+            }
+          ],
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          }
+        },
+        "options": {}
+      },
+      "position": [
+        860,
+        220
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2
+    },
+    {
+      "id": "completed-if",
+      "name": "Produced OCR",
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "produced-ocr",
+              "leftValue": "={{ $json.state }}",
+              "operator": {
+                "operation": "equals",
+                "type": "string"
+              },
+              "rightValue": "completed"
+            }
+          ],
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          }
+        },
+        "options": {}
+      },
+      "position": [
+        1300,
+        -60
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2
+    },
+    {
+      "id": "finished",
+      "name": "Preprocessed",
+      "parameters": {
+        "jsCode": "// The end of the chain. A finished run that produced no OCR rows did not merely\n// stop early -- it produced nothing, and the bridge reports that as failed\n// rather than completed.\nconst s = $json;\nconst start = $('Started').first().json;\nconst c = s.counts || {};\nreturn [{json:{\n  status: 'preprocessed',\n  run_id: s.run_id,\n  council: s.council,\n  batch: s.batch,\n  engine: s.engine,\n  work_dir: s.work_dir,\n  cases_to_process: start.cases_to_process,\n  cases_in_mapping_table: start.cases_in_mapping_table,\n  cases_without_local_download: start.cases_without_local_download,\n  cases_from_portal: start.cases_from_portal,\n  summary_rows: c.summary_rows,\n  detail_rows: c.detail_rows,\n  ocr_rows: c.ocr_rows,\n  outputs: s.outputs,\n  // One row per case, including the ones that produced nothing. The pipeline\n  // counts images and never records which case an image came from, so a case\n  // that downloaded files and produced no page is invisible in every total it\n  // reports. by_status is where that shows.\n  case_log: s.case_log,\n}}];"
+      },
+      "position": [
+        1520,
+        -160
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "stalled",
+      "name": "Run needs a look",
+      "parameters": {
+        "jsCode": "// Neither running nor finished with output. The run directory holds everything\n// it did manage, and the pipeline resumes from its own sidecars, so this is a\n// pause rather than a loss: starting again with skip_existing continues from\n// the last finished image.\nconst s = $json;\nconst c = s.counts || {};\nreturn [{json:{\n  status: s.state === 'failed' ? 'pipeline_failed' : 'still_running_after_budget',\n  run_id: s.run_id,\n  work_dir: s.work_dir,\n  state: s.state,\n  ocr_rows: c.ocr_rows,\n  summary_rows: c.summary_rows,\n  log_tail: s.log_tail,\n  resume_with: {work_dir: s.work_dir, skip_existing: true},\n  outputs: s.outputs,\n  case_log: s.case_log,\n}}];"
+      },
+      "position": [
+        1520,
+        60
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "attention",
+      "name": "Needs attention",
+      "parameters": {
+        "jsCode": "// Green means OCR came out; everything else is red and says why.\nthrow new Error(`${$json.status}: ${$json.log_tail || $json.detail || 'the run produced no OCR output'}`);"
+      },
+      "position": [
+        1740,
+        60
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "id": "check-inputs",
+      "name": "Check inputs",
+      "parameters": {
+        "body": "={{ JSON.stringify({mapping_table: $json.mapping_table}) }}",
+        "contentType": "raw",
+        "method": "POST",
+        "options": {
+          "timeout": 300000
+        },
+        "rawContentType": "application/json",
+        "sendBody": true,
+        "url": "http://host.docker.internal:5681/check"
+      },
+      "position": [
+        -130,
+        0
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "id": "inputs-ready",
+      "name": "Inputs usable",
+      "parameters": {
+        "jsCode": "// A batch that is half downloaded is a real state, so this reports counts and\n// only stops when there is nothing to work on. The numbers travel with the run:\n// a batch that shrinks between mapping and OCR is the failure worth catching,\n// and it can only be seen by comparing what the table listed with what was read.\nconst c = $json;\nconst cases = c.cases || {};\nif (!c.ready) {\n  throw new Error(`${c.mapping_table} cannot be preprocessed: ${(c.reasons || []).join('; ')}`);\n}\nreturn [{json:{\n  mapping_table: c.mapping_table,\n  engine: $('Validate request').first().json.engine,\n  council: c.council,\n  batch: c.batch,\n  cases_in_table: cases.in_table,\n  cases_with_local_path: cases.with_local_path,\n  cases_without_local_path: cases.without_local_path,\n  cases_from_portal: cases.from_portal,\n  local_file_present: cases.local_file_present,\n  local_file_missing: cases.local_file_missing,\n  missing_examples: c.missing_examples || [],\n}}];"
+      },
+      "position": [
+        -20,
+        160
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    }
+  ],
+  "pinData": null,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": []
+}
